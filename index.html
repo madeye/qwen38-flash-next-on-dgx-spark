@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3.8-Flash-Next on a single NVIDIA DGX Spark</title>
+<meta name="description" content="Field notes: running the 176B-parameter Qwen3.8-Flash-Next MoE (NVFP4 + fp8 hybrid, MTP speculative decoding) on one DGX Spark / GB10 with vLLM.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
+<meta property="og:description" content="176B MoE, 6B active — NVFP4 + MTP on one GB10 with vLLM: setup notes, pitfalls, and benchmarks.">
+<meta property="og:url" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/">
+<meta property="og:image" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/assets/social-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
+<meta name="twitter:description" content="176B MoE, 6B active — NVFP4 + MTP on one GB10 with vLLM: setup notes, pitfalls, and benchmarks.">
+<meta name="twitter:image" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/assets/social-card.png">
+<style>
+  :root { --bg:#0d1117; --fg:#e6edf3; --dim:#8b949e; --green:#76b900; --chip:#161b22; --edge:#30363d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         line-height:1.6; }
+  main { max-width:820px; margin:0 auto; padding:48px 24px 96px; }
+  h1 { font-size:2.2rem; margin:0 0 4px; }
+  h2 { font-size:1.3rem; margin:40px 0 12px; border-bottom:1px solid var(--edge); padding-bottom:6px; }
+  .sub { color:var(--green); font-size:1.15rem; margin:0 0 8px; }
+  .dim { color:var(--dim); }
+  .card { width:100%; border-radius:12px; border:1px solid var(--edge); margin:24px 0; }
+  table { border-collapse:collapse; width:100%; margin:12px 0; }
+  th, td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--edge); }
+  th { color:var(--dim); font-weight:600; }
+  code { background:var(--chip); border:1px solid var(--edge); border-radius:6px; padding:1px 6px;
+         font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.9em; }
+  pre { background:var(--chip); border:1px solid var(--edge); border-radius:10px; padding:14px 16px;
+        overflow-x:auto; }
+  pre code { background:none; border:none; padding:0; }
+  a { color:var(--green); }
+  .btn { display:inline-block; margin-top:8px; padding:10px 20px; border:1px solid var(--green);
+         border-radius:8px; color:var(--green); text-decoration:none; font-weight:600; }
+  .btn:hover { background:rgba(118,185,0,.1); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Qwen3.8-Flash-Next on a single DGX Spark</h1>
+  <p class="sub">176B-parameter MoE · 6B active · vLLM · NVFP4 + fp8 hybrid · MTP speculative decoding</p>
+  <p class="dim">Field notes from serving
+    <a href="https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4">Qwen3.8-Flash-Next NVFP4</a>
+    on one NVIDIA DGX Spark (GB10, 128 GB unified memory) with the
+    <a href="https://github.com/blazux/qwen3.8-Flash-DGX">qwen3.8-Flash-DGX</a> recipe.</p>
+
+  <img class="card" src="assets/social-card.png" alt="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark — 125B+51B params, 21.6 tok/s decode, 262k native context, 128 GB unified GB10 memory">
+
+  <h2>Measured (single request, greedy)</h2>
+  <table>
+    <tr><th>Metric</th><th>NVFP4</th><th>Hybrid (+fp8 side layers)</th></tr>
+    <tr><td>Prefill, cold 10.7k prompt</td><td>1,042 tok/s</td><td>916 tok/s</td></tr>
+    <tr><td>Prefix-cache hit TTFT</td><td>1.48 s</td><td>1.50 s</td></tr>
+    <tr><td>Decode, 400-token answer</td><td>19.1 tok/s</td><td><b>21.6 tok/s (+13%)</b></td></tr>
+    <tr><td>Deterministic at T=0</td><td>yes</td><td>yes</td></tr>
+  </table>
+
+  <h2>How it fits in 128 GB</h2>
+  <p>The 122 GiB checkpoint holds a 44 GiB n-gram embedding table that each token only
+  reads 16 rows of. The patched vLLM image serves it from NVMe via <code>mmap</code>,
+  so resident weights drop to ~76 GiB and the rest of the unified pool is KV cache.</p>
+
+  <h2>Serving config</h2>
+  <pre><code>scripts/serve.sh   # MODE=nvfp4 | MODE=hybrid
+# MTP=2 · prefix caching · exact top-k · 262,144-token context · 8 seqs</code></pre>
+
+  <p>Full write-up — setup, benchmarks, and memory-reduction options —
+  is in the repository README.</p>
+
+  <a class="btn" href="https://github.com/madeye/qwen38-flash-next-on-dgx-spark">View on GitHub</a>
+</main>
+</body>
+</html>

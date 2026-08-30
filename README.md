@@ -25,40 +25,13 @@ image serves it from NVMe via `mmap` instead of keeping it resident:
 - On unified memory, "CPU offload" saves nothing (same pool) — only serving
   from disk actually frees memory.
 
-## Environment pitfalls hit (GB10/DGX OS specific)
-
-1. **Docker daemon access**: user was not in the `docker` group.
-   `sudo usermod -aG docker <user>` (use `sg docker -c '...'` for the current session).
-2. **No NVIDIA runtime in Docker**: `nvidia-container-toolkit` was installed but not
-   registered. Fix: `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`.
-3. **Broken direct DNS (shadowvpn split-DNS)**: the host resolves almost nothing
-   directly; outbound HTTPS only works through a local proxy (`127.0.0.1:7890`).
-   The Docker **daemon** needs the proxy too (for `docker pull`):
-
-   ```ini
-   # /etc/systemd/system/docker.service.d/proxy.conf
-   [Service]
-   Environment="HTTP_PROXY=http://127.0.0.1:7890"
-   Environment="HTTPS_PROXY=http://127.0.0.1:7890"
-   Environment="NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
-   ```
-
-   Since the proxy binds localhost only, containers that need network (the weight
-   download) must run with `--network host` and the same `*_PROXY` env vars.
-4. **126 GB weight download died mid-way** on a TLS handshake timeout through the
-   proxy. `hf download` is resumable; wrap it in a retry loop:
-
-   ```bash
-   while ! hf download RadixArk/Qwen3.8-Flash-Next-NVFP4 --max-workers 8; do sleep 10; done
-   ```
-
 ## Setup (as run)
 
 ```bash
 git clone https://github.com/blazux/qwen3.8-Flash-DGX.git
 cd qwen3.8-Flash-DGX
 docker build -t qwen38-flash-dgx .
-# weights: see retry loop above (~122 GiB, resumable)
+hf download RadixArk/Qwen3.8-Flash-Next-NVFP4   # ~122 GiB, resumable
 scripts/serve.sh            # MODE=nvfp4, MTP=2, prefix caching, exact top-k
 scripts/smoke-test.sh
 ```
