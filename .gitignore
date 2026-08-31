@@ -1,0 +1,6 @@
+# Gateway API keys and admin token (mode 0600)
+gateway.json
+gateway.tmp
+
+__pycache__/
+*.pyc

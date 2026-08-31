@@ -5,7 +5,11 @@ MoE (125B main + 51B n-gram embedding table, 6B active per token) — on **one**
 DGX Spark / GB10, using vLLM with the model's built-in MTP speculative decoding.
 
 Recipe source: [blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)
-(patched official vLLM image `vllm/vllm-openai:qwen38-flash-next`).
+(patched official vLLM image `vllm/vllm-openai:qwen38-flash-next`). The recipe files
+(`Dockerfile`, `src/`, `tools/`, `scripts/`) are **vendored in this repo** so it is
+self-contained; they remain Apache-2.0 © blazux (see `LICENSE`).
+`scripts/gateway.py` and `scripts/serve-public.sh` are additions of this repo, not
+part of that recipe.
 Checkpoint: [RadixArk/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4).
 
 ## Hardware
@@ -28,12 +32,13 @@ image serves it from NVMe via `mmap` instead of keeping it resident:
 ## Setup (as run)
 
 ```bash
-git clone https://github.com/blazux/qwen3.8-Flash-DGX.git
-cd qwen3.8-Flash-DGX
+git clone https://github.com/madeye/qwen38-flash-next-on-dgx-spark.git
+cd qwen38-flash-next-on-dgx-spark
 docker build -t qwen38-flash-dgx .
 hf download RadixArk/Qwen3.8-Flash-Next-NVFP4   # ~122 GiB, resumable
 scripts/serve.sh            # MODE=nvfp4, MTP=2, prefix caching, exact top-k
 scripts/smoke-test.sh
+scripts/serve-public.sh     # optional: loopback vLLM + authenticating gateway on :8080
 ```
 
 Effective serving config: native 262,144-token context, MTP=2 speculative tokens,
@@ -69,6 +74,77 @@ NVFP4.
 
 Hybrid trades a little cold-prefill speed for meaningfully faster decode and
 ~7 GiB less resident weight — the right default for an interactive/agentic box.
+
+## Serving it publicly
+
+`scripts/serve.sh` publishes the API on `0.0.0.0` with no authentication of its
+own — fine on a private box, not something to leave on a LAN. `serve-public.sh`
+pins the container's port to loopback instead and fronts it with `gateway.py`:
+
+```bash
+scripts/serve-public.sh              # container + gateway on 0.0.0.0:8080
+MODE=hybrid scripts/serve-public.sh  # every serve.sh variable passes through
+GW_PORT=9000 scripts/serve-public.sh
+```
+
+The gateway proxies `/v1/*` and `/metrics`, requires `Authorization: Bearer
+<key>` on every one of them, and 404s everything else — vLLM's other routes
+(`/tokenize`, `/sleep`, the shutdown endpoints) never reach the public
+interface. Streaming passes through chunk-by-chunk, so SSE latency is
+unaffected. It needs only `aiohttp`, declared inline in the script, so
+`uv run scripts/gateway.py` installs nothing permanently.
+
+Keys live in the gateway rather than in the container's argv, which is the
+point: rotating one takes effect on the next request instead of restarting a
+container that loads ~76 GiB of weights over ~10 minutes. Startup prints the
+dashboard URL with its admin token:
+
+```
+gateway    0.0.0.0:8080  ->  http://127.0.0.1:18300
+api base   http://192.168.0.4:8080/v1
+dashboard  http://192.168.0.4:8080/?token=<admin token>
+```
+
+The dashboard shows upstream health and the served model, lets you edit the
+advertised API base URL (override it if you front the gateway with a tunnel or
+domain), and manages keys — create, label, reveal, copy, rotate, revoke, with
+per-key request counts and last-used times. It also renders a ready-to-paste
+curl and OpenAI-SDK snippet. State lives in `gateway.json` (mode 0600,
+gitignored); the admin token is generated on first run and persists there.
+
+Ctrl-C stops the gateway but leaves the container running — it is detached with
+`--restart unless-stopped`, and a 10-minute weight load is not worth throwing
+away on a terminal hangup. Stop it with `docker rm -f qwen38-flash`.
+
+#### Getting and setting keys
+
+Three equivalent routes, in rough order of convenience:
+
+```bash
+# the dashboard: show / copy / rotate / revoke, per key
+python3 -c "import json;d=json.load(open('gateway.json'));\
+print(f\"http://127.0.0.1:8080/?token={d['admin_token']}\")"
+
+# the admin API
+curl -s -H "X-Admin-Token: $TOK" localhost:8080/admin/state          # list
+curl -s -H "X-Admin-Token: $TOK" -d '{"label":"laptop"}' \
+     -H 'Content-Type: application/json' localhost:8080/admin/keys   # create
+curl -s -H "X-Admin-Token: $TOK" -d '{}' \
+     localhost:8080/admin/keys/<id>/rotate                           # rotate
+
+# or just edit gateway.json -- the only way to set a *chosen* value,
+# since the dashboard and API only generate random ones
+```
+
+`gateway.json` is re-read within a second of changing, so a hand-edited key,
+`public_url`, or `admin_token` takes effect on the next request with no restart.
+Per-key request counters are preserved across a reload, an unparseable file is
+ignored (and warned about once) rather than crashing the gateway, and emptying
+the `keys` list regenerates one instead of locking everyone out.
+
+**This is bearer auth over plain HTTP.** It is enough for a trusted LAN. Before
+exposing it further, put TLS in front of it — a Cloudflare tunnel, Tailscale, or
+a reverse proxy — and set the dashboard's API base URL to that public address.
 
 ## Reducing memory footprint on a MoE (what actually works here)
 

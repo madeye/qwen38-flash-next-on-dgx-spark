@@ -71,6 +71,18 @@
   <pre><code>scripts/serve.sh   # MODE=nvfp4 | MODE=hybrid
 # MTP=2 · prefix caching · exact top-k · 262,144-token context · 8 seqs</code></pre>
 
+  <h2>Serving it to other machines</h2>
+  <p><code>scripts/serve.sh</code> publishes an unauthenticated API on all interfaces.
+  <code>scripts/serve-public.sh</code> pins vLLM to loopback and fronts it with a small
+  gateway: bearer auth on <code>/v1/*</code> and <code>/metrics</code>, 404 on everything
+  else, streaming passed through untouched. Keys live in the gateway, so rotating one
+  takes effect on the next request instead of restarting a container that loads
+  ~76 GiB of weights.</p>
+  <pre><code>scripts/serve-public.sh   # container on 127.0.0.1:18300, gateway on 0.0.0.0:8080</code></pre>
+  <p>The admin dashboard it serves at <code>/</code> shows upstream health and the served
+  model, edits the advertised API base URL, and creates, reveals, rotates and revokes keys
+  with per-key request counts.</p>
+
   <p>Full write-up — setup, benchmarks, and memory-reduction options —
   is in the repository README.</p>
 

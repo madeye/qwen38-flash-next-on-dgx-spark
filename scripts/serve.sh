@@ -16,6 +16,9 @@
 #   EXACT_TOPK=1      1 = exact, deterministic QSA top-k (identical output at temperature 0;
 #                     costs ~10-40% on long prefills). 0 = stock kernel (faster, non-deterministic)
 #   PORT=18300        host port for the API
+#   BIND_ADDR=0.0.0.0 host interface the port is published on. The API has no auth of
+#                     its own, so 0.0.0.0 exposes an unauthenticated model to the LAN.
+#                     scripts/serve-public.sh sets 127.0.0.1 and fronts it with the gateway
 #   CTX=262144        max context length (native). With YARN=1 up to ~500000 (see README)
 #   YARN=0            1 = YaRN rope scaling (factor 4) for CTX > 262144
 #   SEQS=8            max concurrent sequences. Do NOT leave this at 1-2 when measuring
@@ -41,6 +44,7 @@ MODE="${MODE:-nvfp4}"
 PREFIX_CACHE="${PREFIX_CACHE:-1}"
 EXACT_TOPK="${EXACT_TOPK:-1}"
 PORT="${PORT:-18300}"
+BIND_ADDR="${BIND_ADDR:-0.0.0.0}"
 CTX="${CTX:-262144}"
 YARN="${YARN:-0}"
 SEQS="${SEQS:-8}"
@@ -108,7 +112,7 @@ PC_ARG=--no-enable-prefix-caching
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 # shellcheck disable=SC2086
 docker run -d --name "$NAME" --restart unless-stopped \
-  --gpus all --ipc=host --shm-size 16g -p "${PORT}:8000" \
+  --gpus all --ipc=host --shm-size 16g -p "${BIND_ADDR}:${PORT}:8000" \
   -v "$HF_CACHE:/hf" -e HF_HOME=/hf -e HF_HUB_OFFLINE=1 \
   -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" \
   -e VLLM_QSA_EXACT_TOPK="$EXACT_TOPK" \
@@ -127,6 +131,6 @@ docker run -d --name "$NAME" --restart unless-stopped \
     --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3 \
     "${SPEC[@]}"
 
-echo ">> $NAME starting on :$PORT (model 'qwen3.8-flash-next', mode=$MODE, ctx $CTX, yarn=$YARN, mtp=$MTP, seqs=$SEQS, prefix_cache=$PREFIX_CACHE, exact_topk=$EXACT_TOPK, kv_dtype=$KV_DTYPE)"
+echo ">> $NAME starting on ${BIND_ADDR}:$PORT (model 'qwen3.8-flash-next', mode=$MODE, ctx $CTX, yarn=$YARN, mtp=$MTP, seqs=$SEQS, prefix_cache=$PREFIX_CACHE, exact_topk=$EXACT_TOPK, kv_dtype=$KV_DTYPE)"
 echo ">> first boot loads ~76 GiB of weights (~8-13 min). Follow:  docker logs -f $NAME"
 echo ">> ready when the log says 'Application startup complete'. Then: scripts/smoke-test.sh"
