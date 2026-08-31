@@ -23,7 +23,10 @@
 #   GPU_MEM=0.85      fraction of the 128 GB pool for weights+KV (0.875 got OOM-killed
 #                     on a 300k prefill with MTP — keep the margin; 0.80 for long-running service)
 #   MTP=2             speculative tokens from the model's MTP head (0 = off)
-#   KV_DTYPE=auto     keep auto (=bf16): fp8 is refused by the QSA layers
+#   KV_DTYPE=auto     auto (=bf16) or fp8_e4m3. fp8_e4m3 stores the QSA K/V pages in
+#                     float8_e4m3 and dequantizes in-kernel: 45.7% less KV per token
+#                     (28.4 -> 15.4 KiB), at ~14% slower single-stream decode.
+#                     Auto-sets VLLM_QSA_FP8_KV=1
 #   PREWARM=0         1 = stream the 48 GiB table once at boot to warm the page cache
 #   WORKERS=32        threads for the mmap gather
 #   EXTRA=            extra vllm flags passed verbatim
@@ -95,6 +98,10 @@ if [ "$MTP" != 0 ]; then
   fi
 fi
 
+# fp8 KV needs the QSA guard relaxation as well as the vLLM flag.
+FP8KV_ENV=()
+case "$KV_DTYPE" in fp8*) FP8KV_ENV=(-e VLLM_QSA_FP8_KV=1) ;; esac
+
 PC_ARG=--no-enable-prefix-caching
 [ "$PREFIX_CACHE" = 1 ] && PC_ARG=--enable-prefix-caching
 
@@ -105,6 +112,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   -v "$HF_CACHE:/hf" -e HF_HOME=/hf -e HF_HUB_OFFLINE=1 \
   -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" \
   -e VLLM_QSA_EXACT_TOPK="$EXACT_TOPK" \
+  "${FP8KV_ENV[@]}" \
   -e VLLM_USE_FLASHINFER_SAMPLER=1 -e VLLM_ALLOW_LONG_MAX_MODEL_LEN="$ALLOW_LONG" \
   "${HYBRID_ENV[@]}" \
   "$IMAGE" \
@@ -119,6 +127,6 @@ docker run -d --name "$NAME" --restart unless-stopped \
     --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3 \
     "${SPEC[@]}"
 
-echo ">> $NAME starting on :$PORT (model 'qwen3.8-flash-next', mode=$MODE, ctx $CTX, yarn=$YARN, mtp=$MTP, seqs=$SEQS, prefix_cache=$PREFIX_CACHE, exact_topk=$EXACT_TOPK)"
+echo ">> $NAME starting on :$PORT (model 'qwen3.8-flash-next', mode=$MODE, ctx $CTX, yarn=$YARN, mtp=$MTP, seqs=$SEQS, prefix_cache=$PREFIX_CACHE, exact_topk=$EXACT_TOPK, kv_dtype=$KV_DTYPE)"
 echo ">> first boot loads ~76 GiB of weights (~8-13 min). Follow:  docker logs -f $NAME"
 echo ">> ready when the log says 'Application startup complete'. Then: scripts/smoke-test.sh"

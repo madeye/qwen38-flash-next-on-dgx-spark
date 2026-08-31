@@ -82,3 +82,21 @@ RUN cp ${MO} ${MO}.orig \
  && sed -i 's/^from \. import model$/from . import model\nfrom vllm_fp8_hybrid_modelopt import excluded_quant_config as _fp8_hybrid_excluded/' ${QSA} \
  && grep -q "_fp8_hybrid_excluded(quant_config)" ${QSA} && grep -q "^from vllm_fp8_hybrid_modelopt import" ${QSA} \
  && python3 -c "import ast; ast.parse(open('${QSA}').read()); print('qsa.py hooked OK')"
+
+# --- 7. fp8-e4m3 QSA KV cache (VLLM_QSA_FP8_KV=1) ------------------------------------
+# Stores the main QSA K/V pages as float8_e4m3 and dequantizes to bf16 inside the Triton
+# sparse-attention kernel, right after the paged gather. Q stays bf16, accumulation stays
+# fp32. The 12 full_attention layers are ~85% of the KV pool (24.0 of 28.4 KiB/token).
+# Upstream refuses fp8 KV in four guards purely because the kernel had no dequant path;
+# this adds one. Scales are folded (k into the softmax scale, v into the output) so the
+# inner loop gains no per-element work.
+# Measured on GB10, 500k ctx / hybrid / MTP=2: 29,069 -> 15,782 B per token (-45.7%);
+# a 16 GiB fp8 pool holds 1,088,571 tokens vs 887,878 for a 24 GiB bf16 pool.
+# Costs ~14% single-stream decode (48.6 -> 41.7 tok/s): partly the in-loop dequant, partly
+# MTP acceptance falling 2.694 -> 2.529 as fp8 perturbs the target's logits.
+# Verified: fp8 storage + in-kernel dequant is bitwise identical to a pre-dequantized bf16
+# cache at k/v scales 1.0, 0.5 and 2.0; the bf16 path is bitwise unchanged.
+# No-op unless VLLM_QSA_FP8_KV=1 *and* --kv-cache-dtype fp8_e4m3.
+COPY src/patch_qsa_fp8_kv.py /tmp/patch_qsa_fp8_kv.py
+RUN python3 /tmp/patch_qsa_fp8_kv.py ${SP}/vllm/models/qwen3_8_flash_next/nvidia \
+ && rm /tmp/patch_qsa_fp8_kv.py
