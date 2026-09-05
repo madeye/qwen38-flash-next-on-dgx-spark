@@ -1,0 +1,153 @@
+{
+  "date": "2026-09-06",
+  "reference": {
+    "repository": "https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark",
+    "commit": "203834ca88000c8192112e396b80d886b522caa0"
+  },
+  "launcher_validation": {
+    "tests": 4,
+    "status": "passed",
+    "covered_profiles": [
+      "base",
+      "524k FP8",
+      "524k BF16",
+      "MTP disabled",
+      "explicit overrides",
+      "invalid input rejection"
+    ]
+  },
+  "profile_524k_hybrid": {
+    "configuration": {
+      "max_model_len": 524288,
+      "max_num_seqs": 1,
+      "mtp_tokens": 3,
+      "max_num_batched_tokens": 2048,
+      "cudagraph_mode": "PIECEWISE",
+      "cudagraph_capture_sizes": [4],
+      "kv_dtype": "fp8_e4m3",
+      "kv_bytes": 9663676416,
+      "mode": "hybrid"
+    },
+    "startup_seconds": 881.5,
+    "single_stream_benchmark": [
+      {
+        "workload": "database prose",
+        "prompt_tokens": 41,
+        "completion_tokens": 384,
+        "ttft_seconds": 3.3288941080099903,
+        "decode_tokens_per_second": 27.324730135420527,
+        "elapsed_seconds": 17.345634318015072
+      },
+      {
+        "workload": "code",
+        "prompt_tokens": 35,
+        "completion_tokens": 384,
+        "ttft_seconds": 0.2803993900306523,
+        "decode_tokens_per_second": 32.941165657101266,
+        "elapsed_seconds": 11.907328202039935
+      },
+      {
+        "workload": "TCP prose",
+        "prompt_tokens": 45,
+        "completion_tokens": 384,
+        "ttft_seconds": 0.29560002498328686,
+        "decode_tokens_per_second": 24.72591423329241,
+        "elapsed_seconds": 15.785528987005819
+      }
+    ],
+    "context_validation": [
+      {
+        "prompt_tokens": 32768,
+        "completion_tokens": 64,
+        "ttft_seconds": 25.509397784015164,
+        "elapsed_seconds": 27.75437622703612,
+        "min_mem_available_gib": 20.588336944580078,
+        "capacity_pass": true,
+        "arithmetic_pass": true
+      },
+      {
+        "prompt_tokens": 500000,
+        "completion_tokens": 64,
+        "ttft_seconds": 432.3982320500072,
+        "elapsed_seconds": 433.97091440996155,
+        "min_mem_available_gib": 20.54800033569336,
+        "capacity_pass": true,
+        "arithmetic_pass": true
+      }
+    ],
+    "container_restarts": 0,
+    "oom_killed": false
+  },
+  "profile_262k_nvfp4": {
+    "configuration": {
+      "max_model_len": 262144,
+      "max_num_seqs": 4,
+      "mtp_tokens": 3,
+      "max_num_batched_tokens": 2048,
+      "cudagraph_mode": "PIECEWISE",
+      "cudagraph_capture_sizes": [4, 8, 12, 16],
+      "kv_dtype": "fp8_e4m3",
+      "kv_bytes": 9663676416,
+      "kv_token_capacity": 542103,
+      "full_context_concurrency": 2.07,
+      "mode": "nvfp4"
+    },
+    "startup_seconds": 900.1,
+    "smoke_test": {
+      "coherence_pass": true,
+      "cold_prefill_prompt_tokens": 10665,
+      "cold_prefill_seconds": 10.41,
+      "cold_prefill_tokens_per_second": 1025,
+      "prefix_cache_hit_seconds": 2.66,
+      "determinism_pass": true,
+      "decode_completion_tokens": 400,
+      "decode_elapsed_seconds": 20.81,
+      "decode_tokens_per_second_including_ttft": 19.2
+    },
+    "four_short_requests": {
+      "wall_seconds": 38.07701568596531,
+      "total_completion_tokens": 1536,
+      "aggregate_output_tokens_per_second": 40.339295827906746,
+      "ttft_seconds": [
+        1.7508958860416897,
+        1.7497927219956182,
+        1.571872390981298,
+        1.7499903209973127
+      ],
+      "elapsed_seconds": [
+        38.074555262050126,
+        31.655301049991976,
+        37.658641814952716,
+        34.63513858895749
+      ],
+      "min_mem_available_gib": 17.60971450805664
+    },
+    "four_concurrent_60k_prompts": {
+      "wall_seconds": 158.21641358995112,
+      "total_prompt_tokens": 240000,
+      "total_completion_tokens": 91,
+      "ttft_seconds": [
+        126.78938268002821,
+        53.0426117189927,
+        89.70228813501308,
+        156.18607760203304
+      ],
+      "elapsed_seconds": [
+        130.13948756700847,
+        57.630778629973065,
+        93.48310941900127,
+        158.19926632603165
+      ],
+      "arithmetic_passes": 4,
+      "min_mem_available_gib": 17.44021987915039
+    },
+    "container_restarts": 0,
+    "oom_killed": false
+  },
+  "limitations": [
+    "The 524k hybrid and native 262k NVFP4 profiles differ in model weight layout, context length, sequence limit, and GPU memory setting; their results are not a controlled A/B comparison.",
+    "Measurements are single runs on the same DGX Spark and include current page-cache state.",
+    "The four 60k prompts are repetitive synthetic capacity checks with an arithmetic question, not general long-context retrieval benchmarks.",
+    "The 9 GiB cache supports only 2.07 simultaneous full 262k requests even though max_num_seqs is four."
+  ]
+}

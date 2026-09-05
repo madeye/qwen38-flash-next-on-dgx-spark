@@ -12,6 +12,57 @@ self-contained; they remain Apache-2.0 © blazux (see `LICENSE`).
 part of that recipe.
 Checkpoint: [RadixArk/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4).
 
+## Serving config alignment (2026-09-05)
+
+Compatible defaults follow MiaAI-Lab's
+[config at commit 203834c](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark/blob/203834ca88000c8192112e396b80d886b522caa0/.env.sample).
+The base launcher uses native 262,144 context (YaRN off), MTP=3, four concurrent
+sequences, FP8 KV, and 2,048-token prefill chunks. `MAX_NUM_BATCHED_TOKENS=8192`
+selects the larger chunks used in our earlier benchmarks.
+
+`CUDAGRAPH_CAPTURE_SIZES=auto` explicitly captures `(1 + MTP) * S` for each
+sequence count `S` through `SEQS`: `[4,8,12,16]` at the base defaults, or `[4]`
+in the single-stream 524k profile. A comma list overrides the sizes; an empty
+value uses vLLM's defaults. MTP=0 also works, capturing widths `1..SEQS`.
+
+Our RadixArk checkpoint and CPU mmap PLE implementation differ from MiaAI's
+Mia-AiLab checkpoint and packed PLE offload worker. We retain PIECEWISE graphs,
+the PLE splitting op, exact QSA top-k, and the existing compilation mode;
+MiaAI's FULL_DECODE_ONLY / compilation mode 0 cannot be applied to this PLE path.
+We also retain the locally validated 9 GiB explicit FP8 KV pool instead of
+importing their 16 GiB target and memory estimates for a different checkpoint.
+Four sequences is a scheduler limit, not a guarantee that four full 262k
+requests fit in our pool. Ports and gateway wiring remain as documented below.
+
+The aligned settings were validated on 2026-09-06 with both the 524k
+single-stream profile and the native 262k four-sequence profile. All four graph
+widths captured successfully. The base profile exposed a 542,103-token KV cache
+(2.07x a full 262k request), so four sequences support concurrent shorter
+requests but not four simultaneous full-context requests.
+
+| Profile / workload | Result |
+| --- | ---: |
+| 524k hybrid, short decode | 24.7–32.9 tok/s |
+| 524k hybrid, 32k TTFT | 25.5 s |
+| 524k hybrid, 500k TTFT | 432.4 s |
+| Native NVFP4, 10.7k cold prefill | 1,025 tok/s |
+| Native NVFP4, four short requests | 40.3 aggregate tok/s |
+| Native NVFP4, four concurrent 60k prompts | 158.2 s wall time; 4/4 correct |
+
+The 500k test completed with 20.55 GiB minimum MemAvailable. Four concurrent
+60k prompts completed with 17.44 GiB minimum MemAvailable; their TTFTs ranged
+from 53.0 to 156.2 seconds as the scheduler interleaved prefill. No tested
+profile restarted or OOMed. See the
+[alignment validation report](docs/config-alignment-test-2026-09-06.json) for
+configuration, timings, and limitations.
+
+The older performance reports below record 8,192-token chunks and
+vLLM-default capture sizes. To reproduce those launcher settings, use:
+
+```bash
+MAX_NUM_BATCHED_TOKENS=8192 CUDAGRAPH_CAPTURE_SIZES= bash scripts/serve-500k.sh
+```
+
 ## Local single-stream 524k profile (2026-09-05)
 
 ```bash
@@ -64,7 +115,8 @@ and usage are in [the validation report](docs/performance-2026-09-05.json).
 
 ### Latest FP8 single-stream measurements (2026-09-05)
 
-Refreshed at 13:47 UTC against the running default FP8 profile above, using
+Refreshed at 13:47 UTC against the then-running FP8 profile (8,192-token
+prefill chunks and vLLM-default graph capture sizes), using
 `scripts/bench-single-stream.py`: three sequential prompts, temperature 0,
 thinking disabled, and 384 output tokens each.
 
@@ -144,15 +196,16 @@ git clone https://github.com/madeye/qwen38-flash-next-on-dgx-spark.git
 cd qwen38-flash-next-on-dgx-spark
 docker build -t qwen38-flash-dgx .
 hf download RadixArk/Qwen3.8-Flash-Next-NVFP4   # ~122 GiB, resumable
-scripts/serve.sh            # MODE=nvfp4, MTP=2, prefix caching, exact top-k
+scripts/serve.sh            # MODE=nvfp4, MTP=3, prefix caching, exact top-k
 scripts/smoke-test.sh
 scripts/serve-public.sh     # optional: loopback vLLM + authenticating gateway on :8080
 ```
 
-`scripts/serve.sh` defaults: native 262,144-token context, MTP=2 speculative tokens,
-`--enable-prefix-caching`, deterministic exact QSA top-k, 8 concurrent sequences,
+`scripts/serve.sh` defaults: native 262,144-token context, MTP=3 speculative tokens,
+`--enable-prefix-caching`, deterministic exact QSA top-k, 4 concurrent sequences,
 `--gpu-memory-utilization 0.85`, PIECEWISE CUDA graphs (the mmap'd PLE gather is a
-splitting op), and a 9 GiB FP8 KV pool using the patched QSA layers.
+splitting op), automatic graph capture widths, 2,048-token prefill chunks,
+and a 9 GiB FP8 KV pool using the patched QSA layers.
 For the validated single-stream 524k configuration, use `scripts/serve-500k.sh` above.
 
 ## Earlier baseline results (single request, greedy)
