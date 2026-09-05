@@ -62,6 +62,27 @@ single-stream decode measured **26.3–33.4 tok/s**; warm TTFT was **0.24–0.30
 speedup comparison against the old profile. Full prompts, outputs, configuration,
 and usage are in [the validation report](docs/performance-2026-09-05.json).
 
+### Latest FP8 single-stream measurements (2026-09-05)
+
+Refreshed at 13:47 UTC against the running default FP8 profile above, using
+`scripts/bench-single-stream.py`: three sequential prompts, temperature 0,
+thinking disabled, and 384 output tokens each.
+
+| Workload | Decode | TTFT | End-to-end throughput |
+| --- | ---: | ---: | ---: |
+| Database prose | 28.4 tok/s | 0.23 s | 28.0 tok/s |
+| Code | 33.5 tok/s | 0.27 s | 32.8 tok/s |
+| TCP prose | 24.6 tok/s | 0.31 s | 24.2 tok/s |
+
+These are one sample per prompt on an already-running server with prefix caching
+enabled; the cache was not reset. Decode excludes TTFT and uses 383 tokens over
+the interval between the first and last content chunks. End-to-end throughput
+uses all 384 output tokens over the full request duration. Raw outputs, usage,
+timings, and the running server command are in the
+[refresh report](docs/performance-fp8-refresh-2026-09-05.json).
+The BF16 comparison and 500k capacity results below are from the earlier validation
+and were not rerun for this refresh.
+
 ### Default FP8 KV profile and BF16 comparison
 
 ```bash
@@ -134,7 +155,10 @@ scripts/serve-public.sh     # optional: loopback vLLM + authenticating gateway o
 splitting op), and a 9 GiB FP8 KV pool using the patched QSA layers.
 For the validated single-stream 524k configuration, use `scripts/serve-500k.sh` above.
 
-## Measured results (single request, greedy)
+## Earlier baseline results (single request, greedy)
+
+These measurements predate the tuned MTP=3 single-stream profile above. Their
+decode figures include TTFT; use the latest table for current-profile performance.
 
 ### MODE=nvfp4 (checkpoint as published)
 

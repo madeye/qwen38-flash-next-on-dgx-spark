@@ -1,0 +1,115 @@
+{
+  "measured_at_utc": "2026-09-05T13:47:59.089771+00:00",
+  "configuration": {
+    "image": "qwen38-flash-dgx:performance",
+    "mode": "hybrid",
+    "max_model_len": 524288,
+    "yarn_factor": 2.0,
+    "max_num_seqs": 1,
+    "mtp_tokens": 3,
+    "kv_dtype": "fp8_e4m3",
+    "kv_bytes": 9663676416,
+    "kv_token_capacity": 603639,
+    "max_num_batched_tokens": 8192,
+    "prefix_caching": true,
+    "exact_topk": true,
+    "ple_madv_random": true
+  },
+  "image_id": "sha256:73420b593031cc967cd64815ea3a35670c9f5e838b8cf2b7c9fcbb787f708834",
+  "server_command": [
+    "/hf/hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594-fp8hybrid",
+    "--served-model-name",
+    "qwen3.8-flash-next",
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "8000",
+    "--load-format",
+    "safetensors",
+    "--max-model-len",
+    "524288",
+    "--max-num-seqs",
+    "1",
+    "--gpu-memory-utilization",
+    "0.80",
+    "--enable-prefix-caching",
+    "--enable-chunked-prefill",
+    "--max-num-batched-tokens",
+    "8192",
+    "-cc.cudagraph_mode=PIECEWISE",
+    "-cc.splitting_ops=[\"vllm::unified_attention_with_output\",\"vllm::unified_mla_attention_with_output\",\"vllm::mamba_mixer2\",\"vllm::mamba_mixer\",\"vllm::short_conv\",\"vllm::qwen3_8_flash_next_ple_short_conv\",\"vllm::qwen3_8_flash_next_qsa_with_output\",\"vllm::linear_attention\",\"vllm::qwen_gdn_attention_core\",\"vllm::qwen_gdn_attention_core_fused_norm_packed\",\"vllm::sparse_attn_indexer\",\"vllm::ple_mmap_lookup\"]",
+    "--no-enable-flashinfer-autotune",
+    "--kv-cache-dtype",
+    "fp8_e4m3",
+    "--kv-cache-memory",
+    "9663676416",
+    "--hf-overrides",
+    "{\"text_config\": {\"rope_parameters\": {\"rope_type\": \"yarn\", \"factor\": 2.0, \"original_max_position_embeddings\": 262144}}}",
+    "--enable-auto-tool-choice",
+    "--tool-call-parser",
+    "qwen3_coder",
+    "--reasoning-parser",
+    "qwen3",
+    "--speculative-config",
+    "{\"method\":\"mtp\",\"num_speculative_tokens\":3,\"max_model_len\":524288}"
+  ],
+  "benchmark_script": "scripts/bench-single-stream.py",
+  "generation_settings": {
+    "temperature": 0,
+    "max_tokens": 384,
+    "enable_thinking": false,
+    "stream": true
+  },
+  "single_stream_benchmark": [
+    {
+      "prompt": "Explain how database transactions prevent lost updates. Give a concrete example with two clients and discuss isolation levels. Write about 400 words.",
+      "usage": {
+        "prompt_tokens": 41,
+        "total_tokens": 425,
+        "completion_tokens": 384,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "ttft_seconds": 0.23493279999820516,
+      "decode_tokens_per_second": 28.38751052001046,
+      "elapsed_seconds": 13.726937545987312,
+      "text": "Database transactions prevent lost updates by ensuring that concurrent operations on the same data do not interfere with each other in ways that cause one change to overwrite another. A lost update occurs when two transactions read the same data, modify it, and write it back, causing the second write to overwrite the first, effectively losing the first transaction\u2019s changes.\n\nConsider a concrete example involving a bank account with a balance of $100. Two clients, Alice and Bob, attempt to withdraw $50 simultaneously. Without proper transaction handling, the following race condition might occur:\n1. Alice reads the balance: $100.\n2. Bob reads the balance: $100.\n3. Alice calculates the new balance: $100 - $50 = $50, and writes $50 to the database.\n4. Bob calculates the new balance: $100 - $50 = $50, and writes $50 to the database.\n\nThe final balance is $50, but it should be $0. Bob\u2019s update overwrote Alice\u2019s, resulting in a lost update.\n\nTo prevent this, databases use isolation levels, which define how visible changes made by one transaction are to others. The most common isolation levels are:\n\n**Read Committed**: This level ensures that a transaction only reads data that has been committed by other transactions. However, it does not prevent lost updates in the scenario above because both Alice and Bob can still read the initial value before either writes.\n\n**Repeatable Read**: This level ensures that if a transaction reads a value, it will see the same value throughout the transaction. While this prevents non-repeatable reads, it may still allow lost updates unless combined with locking mechanisms.\n\n**Serializable**: This is the highest isolation level. It ensures that transactions are executed as if they were run sequentially, one after"
+    },
+    {
+      "prompt": "Write a Python function that merges overlapping closed intervals. Include type hints, explain the algorithm, and show three examples.",
+      "usage": {
+        "prompt_tokens": 35,
+        "total_tokens": 419,
+        "completion_tokens": 384,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "ttft_seconds": 0.2746256349491887,
+      "decode_tokens_per_second": 33.54667233320951,
+      "elapsed_seconds": 11.691740401962306,
+      "text": "```python\nfrom typing import List\n\n\ndef merge_intervals(intervals: List[List[int]]) -> List[List[int]]:\n    \"\"\"\n    Merge overlapping closed intervals.\n    \n    Algorithm:\n    1. Sort intervals by their start point.\n    2. Initialize an empty list to hold merged intervals.\n    3. Iterate through the sorted intervals:\n       - If the result list is empty, add the first interval.\n       - Otherwise, compare the current interval's start with the last merged interval's end.\n       - If the current interval's start <= last merged interval's end, they overlap.\n         Update the last merged interval's end to be the max of both ends.\n       - If they don't overlap, add the current interval as a new merged interval.\n    4. Return the merged intervals.\n    \n    Time Complexity: O(n log n) due to sorting.\n    Space Complexity: O(n) for the result list (excluding sorting space).\n    \n    Args:\n        intervals: A list of [start, end] pairs representing closed intervals.\n        \n    Returns:\n        A list of merged non-overlapping closed intervals.\n    \"\"\"\n    if not intervals:\n        return []\n    \n    # Sort intervals by start point\n    sorted_intervals = sorted(intervals, key=lambda x: x[0])\n    \n    merged: List[List[int]] = []\n    \n    for interval in sorted_intervals:\n        # If merged is empty or no overlap, add the interval\n        if not merged or interval[0] > merged[-1][1]:\n            merged.append(interval)\n        else:\n            # Overlap: extend the end of the last merged interval\n            merged[-1][1] = max(merged[-1][1], interval[1])\n    \n   "
+    },
+    {
+      "prompt": "Explain how TCP handles packet loss and congestion. Describe retransmission, acknowledgements, and congestion control with an example. Write about 400 words.",
+      "usage": {
+        "prompt_tokens": 45,
+        "total_tokens": 429,
+        "completion_tokens": 384,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "ttft_seconds": 0.3056444689864293,
+      "decode_tokens_per_second": 24.57894762477873,
+      "elapsed_seconds": 15.888233804958872,
+      "text": "TCP (Transmission Control Protocol) is designed to provide reliable, ordered, and error-checked delivery of data over unreliable networks. To achieve this, it employs sophisticated mechanisms to handle packet loss and network congestion, primarily through acknowledgements, retransmission timers, and congestion control algorithms.\n\nThe foundation of TCP\u2019s reliability is the acknowledgement (ACK) system. When a sender transmits a segment of data, the receiver must send back an ACK confirming receipt. TCP uses cumulative acknowledgements, meaning an ACK for sequence number $N$ indicates that all bytes up to $N-1$ have been successfully received. If a packet is lost, the receiver cannot send a valid ACK for the missing data. Consequently, the sender\u2019s retransmission timer expires, triggering a retransmission of the unacknowledged segment. This is known as timeout-based retransmission. However, waiting for a timeout is slow. To improve efficiency, TCP also uses Fast Retransmit. If the sender receives three duplicate ACKs for the same sequence number, it infers that a packet was lost (since subsequent packets arrived out of order) and immediately retransmits the missing segment without waiting for the timer to expire.\n\nCongestion control is distinct from error control. While packet loss can occur due to random bit errors, in modern networks, it is often a sign of congestion\u2014routers dropping packets because their buffers are full. TCP interprets packet loss as a signal to slow down transmission to prevent network collapse. This is managed through the congestion window ($cwnd$), which limits the amount of unacknowledged data in the network.\n\nConsider a scenario where a client downloads a large file from a server. Initially, the server uses **Slow Start**, exponentially increasing the $cwnd$ (e.g., 1, 2, 4, 8 segments) to probe the network\u2019s capacity. Suppose the"
+    }
+  ],
+  "limitations": [
+    "One sample per prompt on the already-running server; prefix caching enabled and cache state not reset.",
+    "Decode rate is (completion_tokens - 1) / (last content arrival - first content arrival); end-to-end rate includes TTFT and stream completion.",
+    "The earlier BF16 comparison and 500k capacity measurements were not rerun."
+  ]
+}
