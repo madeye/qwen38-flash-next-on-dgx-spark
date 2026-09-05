@@ -26,13 +26,13 @@
 #   GPU_MEM=0.85      fraction of the 128 GB pool for weights+KV (0.875 got OOM-killed
 #                     on a 300k prefill with MTP — keep the margin; 0.80 for long-running service)
 #   MTP=2             speculative tokens from the model's MTP head (0 = off)
-#   KV_DTYPE=auto     auto (=bf16) or fp8_e4m3. fp8_e4m3 stores the QSA K/V pages in
+#   KV_DTYPE=fp8_e4m3 auto (=bf16) or fp8_e4m3. fp8_e4m3 stores the QSA K/V pages in
 #                     float8_e4m3 and dequantizes in-kernel: 45.7% less KV per token
 #                     (28.4 -> 15.4 KiB), at ~14% slower single-stream decode.
 #                     Auto-sets VLLM_QSA_FP8_KV=1
 #   PREWARM=0         1 = stream the 48 GiB table once at boot to warm the page cache
 #   WORKERS=32        threads for the mmap gather
-#   KV_BYTES=         optional explicit KV pool in bytes; bypasses GPU_MEM KV sizing
+#   KV_BYTES=9663676416 9 GiB explicit KV pool; bypasses GPU_MEM KV sizing (empty = auto-size)
 #   DRY_RUN=0        1 = print launch without stopping or starting containers
 #   EXTRA=            extra vllm flags passed verbatim
 #   IMAGE=qwen38-flash-dgx   MODEL=RadixArk/Qwen3.8-Flash-Next-NVFP4
@@ -52,10 +52,10 @@ YARN="${YARN:-0}"
 SEQS="${SEQS:-8}"
 GPU_MEM="${GPU_MEM:-0.85}"
 MTP="${MTP:-2}"
-KV_DTYPE="${KV_DTYPE:-auto}"
+KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"
 PREWARM="${PREWARM:-0}"
 EXTRA="${EXTRA:-}"
-KV_BYTES="${KV_BYTES:-}"
+KV_BYTES="${KV_BYTES-9663676416}"
 
 if ! [[ "$CTX" =~ ^[1-9][0-9]*$ ]] || (( CTX > 524288 )); then
   echo "!! CTX must be a positive integer at or below 524288"; exit 1

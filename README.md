@@ -26,13 +26,13 @@ The incremental image requires the existing `qwen38-flash-dgx:latest` image.
 On a clean machine, first build the main Dockerfile, download weights and run
 `scripts/prepare-hybrid.sh`. This profile uses the prepared hybrid checkpoint,
 524,288 total context tokens, YaRN factor 2, MTP=3, one concurrent sequence,
-prefix caching, exact QSA top-k, and an explicit 16 GiB **BF16** KV pool.
+prefix caching, exact QSA top-k, and an explicit 9 GiB **FP8** KV pool.
 The API listens on `127.0.0.1:18300`. The separate 27B service on port 8080
 is not connected to this endpoint.
 
-This profile prioritizes per-stream speed. BF16 avoids FP8 KV dequantization
-and its effect on speculative acceptance. Hybrid weight quantization remains
-enabled. Exact top-k retains the local correctness fix; `EXACT_TOPK=0` can
+FP8 is the default after the comparison below showed broadly comparable
+single-stream performance with 7 GiB less KV allocation. Hybrid weight quantization
+remains enabled. Exact top-k retains the local correctness fix; `EXACT_TOPK=0` can
 be faster but restores the stock kernel's known candidate-selection issue.
 `SEQS`, `MTP`, and other launcher variables can still be overridden.
 
@@ -53,7 +53,8 @@ The single-stream benchmark uses three sequential short prompts, thinking disabl
 and 384 generated tokens per prompt; it writes `/tmp/flash-single-stream.json`.
 The capacity test writes `/tmp/flash-context-validation.json`.
 
-Validated on this host: the 16 GiB KV pool holds **587,382 tokens**. An exact
+BF16 reference profile (`scripts/serve-500k-bf16.sh`): the 16 GiB KV pool holds
+**587,382 tokens**. An exact
 **500,000-token prompt** completed successfully and returned the correct arithmetic
 answer, with **414.3 s TTFT** and **10.24 GiB minimum MemAvailable**. Short-prompt
 single-stream decode measured **26.3–33.4 tok/s**; warm TTFT was **0.24–0.30 s**
@@ -61,12 +62,12 @@ single-stream decode measured **26.3–33.4 tok/s**; warm TTFT was **0.24–0.30
 speedup comparison against the old profile. Full prompts, outputs, configuration,
 and usage are in [the validation report](docs/performance-2026-09-05.json).
 
-### FP8 KV memory profile
+### Default FP8 KV profile and BF16 comparison
 
 ```bash
-bash scripts/serve-500k-fp8.sh
+bash scripts/serve-500k.sh       # FP8 by default; serve-500k-fp8.sh is an explicit alias
 # Restore the BF16 profile:
-bash scripts/serve-500k.sh
+bash scripts/serve-500k-bf16.sh
 ```
 
 The FP8 profile uses the same image, hybrid weights, 524,288 context, MTP=3,
@@ -127,10 +128,11 @@ scripts/smoke-test.sh
 scripts/serve-public.sh     # optional: loopback vLLM + authenticating gateway on :8080
 ```
 
-Effective serving config: native 262,144-token context, MTP=2 speculative tokens,
+`scripts/serve.sh` defaults: native 262,144-token context, MTP=2 speculative tokens,
 `--enable-prefix-caching`, deterministic exact QSA top-k, 8 concurrent sequences,
 `--gpu-memory-utilization 0.85`, PIECEWISE CUDA graphs (the mmap'd PLE gather is a
-splitting op), bf16 KV cache (fp8 KV is refused by the QSA layers).
+splitting op), and a 9 GiB FP8 KV pool using the patched QSA layers.
+For the validated single-stream 524k configuration, use `scripts/serve-500k.sh` above.
 
 ## Measured results (single request, greedy)
 
