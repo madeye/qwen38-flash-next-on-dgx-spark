@@ -1,0 +1,4 @@
+# Incremental update of the locally installed, patched Flash-Next image.
+# For a clean install, build Dockerfile as qwen38-flash-dgx first.
+FROM qwen38-flash-dgx:latest
+COPY src/vllm_ple_mmap.py /usr/local/lib/python3.12/dist-packages/vllm_ple_mmap.py

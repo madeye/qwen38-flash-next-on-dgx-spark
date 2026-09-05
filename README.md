@@ -12,6 +12,92 @@ self-contained; they remain Apache-2.0 © blazux (see `LICENSE`).
 part of that recipe.
 Checkpoint: [RadixArk/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4).
 
+## Local single-stream 524k profile (2026-09-05)
+
+```bash
+docker build -f Dockerfile.performance -t qwen38-flash-dgx:performance .
+bash scripts/serve-500k.sh
+# After /health succeeds:
+python3 scripts/bench-single-stream.py
+python3 scripts/validate-context.py --tokens 500000
+```
+
+The incremental image requires the existing `qwen38-flash-dgx:latest` image.
+On a clean machine, first build the main Dockerfile, download weights and run
+`scripts/prepare-hybrid.sh`. This profile uses the prepared hybrid checkpoint,
+524,288 total context tokens, YaRN factor 2, MTP=3, one concurrent sequence,
+prefix caching, exact QSA top-k, and an explicit 16 GiB **BF16** KV pool.
+The API listens on `127.0.0.1:18300`. The separate 27B service on port 8080
+is not connected to this endpoint.
+
+This profile prioritizes per-stream speed. BF16 avoids FP8 KV dequantization
+and its effect on speculative acceptance. Hybrid weight quantization remains
+enabled. Exact top-k retains the local correctness fix; `EXACT_TOPK=0` can
+be faster but restores the stock kernel's known candidate-selection issue.
+`SEQS`, `MTP`, and other launcher variables can still be overridden.
+
+Inspired by [MiaAI-Lab's single-Spark recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark),
+PLE mappings now use `MADV_RANDOM` to avoid reading adjacent pages for scattered
+lookups. Set `VLLM_PLE_MMAP_RANDOM=0` for an A/B comparison. YaRN scaling is
+derived from the requested context and preserves the checkpoint's remaining
+RoPE parameters. Context beyond 524,288 is refused, as is context beyond
+262,144 without YaRN.
+
+`KV_BYTES` explicitly sizes KV and bypasses `GPU_MEM` sizing; raising it consumes
+the desktop's shared memory. This is a one-model-at-a-time profile. A 500,000-token
+prompt leaves 24,288 tokens for output. The validation script checks actual API
+usage and records TTFT and host memory; its repeated archive text is a capacity
+test, not evidence of reliable retrieval across arbitrary 500k documents.
+`DRY_RUN=1 bash scripts/serve-500k.sh` prints the launch without replacing a container.
+The single-stream benchmark uses three sequential short prompts, thinking disabled,
+and 384 generated tokens per prompt; it writes `/tmp/flash-single-stream.json`.
+The capacity test writes `/tmp/flash-context-validation.json`.
+
+Validated on this host: the 16 GiB KV pool holds **587,382 tokens**. An exact
+**500,000-token prompt** completed successfully and returned the correct arithmetic
+answer, with **414.3 s TTFT** and **10.24 GiB minimum MemAvailable**. Short-prompt
+single-stream decode measured **26.3–33.4 tok/s**; warm TTFT was **0.24–0.30 s**
+(first request: 3.16 s). These are final-profile measurements, not a matched
+speedup comparison against the old profile. Full prompts, outputs, configuration,
+and usage are in [the validation report](docs/performance-2026-09-05.json).
+
+### FP8 KV memory profile
+
+```bash
+bash scripts/serve-500k-fp8.sh
+# Restore the BF16 profile:
+bash scripts/serve-500k.sh
+```
+
+The FP8 profile uses the same image, hybrid weights, 524,288 context, MTP=3,
+single sequence, and exact top-k. It sets `KV_DTYPE=fp8_e4m3` and a **9 GiB**
+KV pool, saving **7 GiB of allocation** versus the BF16 profile. The installed
+QSA patch stores the main KV pages in FP8 and converts gathered tiles to BF16
+inside the attention kernel, with FP32 accumulation. It does not allocate a
+second full BF16 cache. The side/compressor caches remain BF16. Conversion
+does not recover precision lost during FP8 storage.
+
+Measured on 2026-09-05 with the same three short prompts and generation settings:
+
+| Metric | BF16 KV | FP8 KV |
+| --- | ---: | ---: |
+| KV allocation | 16 GiB | 9 GiB |
+| KV token capacity | 587,382 | 603,639 |
+| Database prose decode | 26.3 tok/s | 26.4 tok/s |
+| Code decode | 33.4 tok/s | 34.8 tok/s |
+| TCP prose decode | 26.5 tok/s | 24.4 tok/s |
+| Warm TTFT | 0.24–0.30 s | 0.26–0.31 s |
+| 500k synthetic-prompt TTFT | 414.3 s | 411.0 s |
+| Minimum available RAM during 500k test | 10.24 GiB | 16.95 GiB |
+
+Both profiles completed exactly 500,000 prompt tokens and returned the correct
+arithmetic answer. Short-prompt performance was mixed and broadly comparable in
+these three single-run samples; generated text differed, affecting MTP acceptance.
+This is a capacity and speed comparison, with general reasoning/retrieval quality
+equivalence still unverified. FP8 was left running after validation.
+See [the FP8 comparison report](docs/performance-fp8-2026-09-05.json) for raw outputs,
+usage, timings, configuration, and limitations.
+
 ## Hardware
 
 - NVIDIA DGX Spark (GB10, Blackwell sm_121), 128 GB **unified** memory (~116 GiB free)
