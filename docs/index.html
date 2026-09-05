@@ -4,17 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Qwen3.8-Flash-Next on a single NVIDIA DGX Spark</title>
-<meta name="description" content="Field notes: running the 176B-parameter Qwen3.8-Flash-Next MoE (NVFP4 + fp8 hybrid, MTP speculative decoding) on one DGX Spark / GB10 with vLLM.">
+<meta name="description" content="Validated serving configs for the 176B-parameter Qwen3.8-Flash-Next MoE on one DGX Spark: native 262k and YaRN 524k, FP8 KV, MTP=3, and concurrent benchmarks.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
-<meta property="og:description" content="176B MoE, 6B active — NVFP4 + MTP on one GB10 with vLLM: setup notes, pitfalls, and benchmarks.">
+<meta property="og:description" content="176B MoE, 6B active — native 262k and YaRN 524k on one GB10 with FP8 KV, MTP=3, setup notes, and measured validation.">
 <meta property="og:url" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/">
 <meta property="og:image" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/assets/social-card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
-<meta name="twitter:description" content="176B MoE, 6B active — NVFP4 + MTP on one GB10 with vLLM: setup notes, pitfalls, and benchmarks.">
+<meta name="twitter:description" content="176B MoE, 6B active — native 262k and YaRN 524k on one GB10 with FP8 KV, MTP=3, setup notes, and measured validation.">
 <meta name="twitter:image" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/assets/social-card.png">
 <style>
   :root { --bg:#0d1117; --fg:#e6edf3; --dim:#8b949e; --green:#76b900; --chip:#161b22; --edge:#30363d; }
@@ -51,9 +51,29 @@
     on one NVIDIA DGX Spark (GB10, 128 GB unified memory) with the
     <a href="https://github.com/blazux/qwen3.8-Flash-DGX">qwen3.8-Flash-DGX</a> recipe.</p>
 
-  <img class="card" src="assets/social-card.png" alt="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark — 125B+51B params, 21.6 tok/s decode, 262k native context, 128 GB unified GB10 memory">
+  <img class="card" src="assets/social-card.png" alt="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
 
-  <h2>Measured (single request, greedy)</h2>
+  <h2>Validated aligned profiles (2026-09-06)</h2>
+  <p>The compatible defaults now follow
+    <a href="https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark/tree/203834ca88000c8192112e396b80d886b522caa0">MiaAI-Lab's single-Spark config</a>:
+    MTP=3, 2,048-token prefill chunks, four scheduler slots, and explicit CUDA graph
+    widths. The RadixArk-specific mmap path keeps PIECEWISE graphs and a 9 GiB FP8 KV pool.</p>
+  <table>
+    <tr><th>Profile / workload</th><th>Measured result</th></tr>
+    <tr><td>524k hybrid, short decode</td><td>24.7–32.9 tok/s</td></tr>
+    <tr><td>524k hybrid, 32k TTFT</td><td>25.5 s</td></tr>
+    <tr><td>524k hybrid, 500k TTFT</td><td>432.4 s · correct</td></tr>
+    <tr><td>Native NVFP4, 10.7k cold prefill</td><td>1,025 tok/s</td></tr>
+    <tr><td>Native NVFP4, four short requests</td><td>40.3 aggregate tok/s</td></tr>
+    <tr><td>Native NVFP4, four concurrent 60k prompts</td><td>158.2 s · 4/4 correct</td></tr>
+  </table>
+  <p>All graph widths <code>[4,8,12,16]</code> captured successfully. The 9 GiB
+    cache holds 542,103 tokens, or 2.07 full 262k requests. The four-way 60k test
+    bottomed at 17.44 GiB MemAvailable; the 500k test bottomed at 20.55 GiB.
+    Neither profile restarted or OOMed. See the
+    <a href="config-alignment-test-2026-09-06.json">raw validation report</a>.</p>
+
+  <h2>Earlier baseline (single request, greedy)</h2>
   <table>
     <tr><th>Metric</th><th>NVFP4</th><th>Hybrid (+fp8 side layers)</th></tr>
     <tr><td>Prefill, cold 10.7k prompt</td><td>1,042 tok/s</td><td>916 tok/s</td></tr>
@@ -68,8 +88,10 @@
   so resident weights drop to ~76 GiB and the rest of the unified pool is KV cache.</p>
 
   <h2>Serving config</h2>
-  <pre><code>scripts/serve.sh   # MODE=nvfp4 | MODE=hybrid
-# MTP=2 · prefix caching · exact top-k · 262,144-token context · 8 seqs</code></pre>
+  <pre><code>scripts/serve.sh        # native 262,144 · NVFP4 · 4 seqs
+scripts/serve-500k.sh   # YaRN 524,288 · hybrid · 1 seq
+# MTP=3 · FP8 KV · 2,048-token chunks · exact top-k
+# CUDA graph widths: [4,8,12,16] for the native profile</code></pre>
 
   <h2>Serving it to other machines</h2>
   <p><code>scripts/serve.sh</code> publishes an unauthenticated API on all interfaces.
