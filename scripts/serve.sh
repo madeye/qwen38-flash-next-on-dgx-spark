@@ -16,19 +16,24 @@
 #   EXACT_TOPK=1      1 = exact, deterministic QSA top-k (identical output at temperature 0;
 #                     costs ~10-40% on long prefills). 0 = stock kernel (faster, non-deterministic)
 #   PORT=18300        host port for the API
+#   BIND_ADDR=0.0.0.0 host interface the port is published on. The API has no auth of
+#                     its own, so 0.0.0.0 exposes an unauthenticated model to the LAN.
+#                     scripts/serve-public.sh sets 127.0.0.1 and fronts it with the gateway
 #   CTX=262144        max context length (native). With YARN=1 up to ~500000 (see README)
-#   YARN=0            1 = YaRN rope scaling (factor 4) for CTX > 262144
+#   YARN=0            1 = YaRN rope scaling (factor CTX / 262144) for CTX > 262144
 #   SEQS=8            max concurrent sequences. Do NOT leave this at 1-2 when measuring
 #                     throughput: requests queue silently and aggregate tok/s flatlines
 #   GPU_MEM=0.85      fraction of the 128 GB pool for weights+KV (0.875 got OOM-killed
 #                     on a 300k prefill with MTP — keep the margin; 0.80 for long-running service)
 #   MTP=2             speculative tokens from the model's MTP head (0 = off)
-#   KV_DTYPE=auto     auto (=bf16) or fp8_e4m3. fp8_e4m3 stores the QSA K/V pages in
+#   KV_DTYPE=fp8_e4m3 auto (=bf16) or fp8_e4m3. fp8_e4m3 stores the QSA K/V pages in
 #                     float8_e4m3 and dequantizes in-kernel: 45.7% less KV per token
 #                     (28.4 -> 15.4 KiB), at ~14% slower single-stream decode.
 #                     Auto-sets VLLM_QSA_FP8_KV=1
 #   PREWARM=0         1 = stream the 48 GiB table once at boot to warm the page cache
 #   WORKERS=32        threads for the mmap gather
+#   KV_BYTES=9663676416 9 GiB explicit KV pool; bypasses GPU_MEM KV sizing (empty = auto-size)
+#   DRY_RUN=0        1 = print launch without stopping or starting containers
 #   EXTRA=            extra vllm flags passed verbatim
 #   IMAGE=qwen38-flash-dgx   MODEL=RadixArk/Qwen3.8-Flash-Next-NVFP4
 set -euo pipefail
@@ -41,14 +46,26 @@ MODE="${MODE:-nvfp4}"
 PREFIX_CACHE="${PREFIX_CACHE:-1}"
 EXACT_TOPK="${EXACT_TOPK:-1}"
 PORT="${PORT:-18300}"
+BIND_ADDR="${BIND_ADDR:-0.0.0.0}"
 CTX="${CTX:-262144}"
 YARN="${YARN:-0}"
 SEQS="${SEQS:-8}"
 GPU_MEM="${GPU_MEM:-0.85}"
 MTP="${MTP:-2}"
-KV_DTYPE="${KV_DTYPE:-auto}"
+KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"
 PREWARM="${PREWARM:-0}"
 EXTRA="${EXTRA:-}"
+KV_BYTES="${KV_BYTES-9663676416}"
+
+if ! [[ "$CTX" =~ ^[1-9][0-9]*$ ]] || (( CTX > 524288 )); then
+  echo "!! CTX must be a positive integer at or below 524288"; exit 1
+fi
+if [[ "$YARN" != 0 && "$YARN" != 1 ]]; then
+  echo "!! YARN must be 0 or 1"; exit 1
+fi
+if (( CTX > 262144 )) && [[ "$YARN" != 1 ]]; then
+  echo "!! CTX above 262144 requires YARN=1"; exit 1
+fi
 
 # Resolve the local snapshot directory and map it to the in-container mount.
 REPO_DIR="$HF_CACHE/hub/models--${MODEL//\//--}"
@@ -79,9 +96,16 @@ SNAP_IN="/hf/hub/models--${MODEL//\//--}/snapshots/$SNAP_NAME"
 SPLIT='["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::qwen3_8_flash_next_ple_short_conv","vllm::qwen3_8_flash_next_qsa_with_output","vllm::linear_attention","vllm::qwen_gdn_attention_core","vllm::qwen_gdn_attention_core_fused_norm_packed","vllm::sparse_attn_indexer","vllm::ple_mmap_lookup"]'
 CC="${CC:--cc.cudagraph_mode=PIECEWISE -cc.splitting_ops=$SPLIT}"
 
-# YaRN (Qwen's published recipe) to go past the native 262144.
+# YaRN scaling to go past the native 262144.
 OVR_ARGS=()
-YARN_OVR='{"text_config": {"rope_parameters": {"mrope_interleaved": true, "mrope_section": [11, 11, 10], "rope_type": "yarn", "rope_theta": 10000000, "partial_rotary_factor": 0.25, "factor": 4.0, "original_max_position_embeddings": 262144}}}'
+# Only override scaling fields; preserve the checkpoint's multimodal rope fields.
+YARN_OVR="$(python3 - "$CTX" <<'PY'
+import json, sys
+print(json.dumps({"text_config": {"rope_parameters": {
+    "rope_type": "yarn", "factor": max(1.0, int(sys.argv[1]) / 262144),
+    "original_max_position_embeddings": 262144}}}))
+PY
+)"
 ALLOW_LONG=0
 if [ "$YARN" != 0 ]; then OVR_ARGS=(--hf-overrides "$YARN_OVR"); ALLOW_LONG=1; fi
 
@@ -105,12 +129,25 @@ case "$KV_DTYPE" in fp8*) FP8KV_ENV=(-e VLLM_QSA_FP8_KV=1) ;; esac
 PC_ARG=--no-enable-prefix-caching
 [ "$PREFIX_CACHE" = 1 ] && PC_ARG=--enable-prefix-caching
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
+KV_ARGS=()
+if [[ -n "$KV_BYTES" ]]; then
+  [[ "$KV_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "!! KV_BYTES must be a positive integer"; exit 1; }
+  KV_ARGS=(--kv-cache-memory "$KV_BYTES")
+fi
+if [[ "${DRY_RUN:-0}" == 1 ]]; then
+  docker() { printf '%q ' "$@"; printf '\n'; }
+else
+  if docker container inspect "$NAME" >/dev/null 2>&1; then
+    docker stop -t 60 "$NAME" >/dev/null
+    docker rm "$NAME" >/dev/null
+  fi
+fi
 # shellcheck disable=SC2086
 docker run -d --name "$NAME" --restart unless-stopped \
-  --gpus all --ipc=host --shm-size 16g -p "${PORT}:8000" \
+  --gpus all --ipc=host --shm-size 16g -p "${BIND_ADDR}:${PORT}:8000" \
   -v "$HF_CACHE:/hf" -e HF_HOME=/hf -e HF_HUB_OFFLINE=1 \
   -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" \
+  -e VLLM_PLE_MMAP_RANDOM="${VLLM_PLE_MMAP_RANDOM:-1}" \
   -e VLLM_QSA_EXACT_TOPK="$EXACT_TOPK" \
   "${FP8KV_ENV[@]}" \
   -e VLLM_USE_FLASHINFER_SAMPLER=1 -e VLLM_ALLOW_LONG_MAX_MODEL_LEN="$ALLOW_LONG" \
@@ -123,10 +160,11 @@ docker run -d --name "$NAME" --restart unless-stopped \
     $CC \
     --no-enable-flashinfer-autotune \
     --kv-cache-dtype "$KV_DTYPE" \
+    "${KV_ARGS[@]}" \
     "${OVR_ARGS[@]}" $EXTRA \
     --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3 \
     "${SPEC[@]}"
 
-echo ">> $NAME starting on :$PORT (model 'qwen3.8-flash-next', mode=$MODE, ctx $CTX, yarn=$YARN, mtp=$MTP, seqs=$SEQS, prefix_cache=$PREFIX_CACHE, exact_topk=$EXACT_TOPK, kv_dtype=$KV_DTYPE)"
+echo ">> $NAME starting on ${BIND_ADDR}:$PORT (model 'qwen3.8-flash-next', mode=$MODE, ctx $CTX, yarn=$YARN, mtp=$MTP, seqs=$SEQS, prefix_cache=$PREFIX_CACHE, exact_topk=$EXACT_TOPK, kv_dtype=$KV_DTYPE)"
 echo ">> first boot loads ~76 GiB of weights (~8-13 min). Follow:  docker logs -f $NAME"
 echo ">> ready when the log says 'Application startup complete'. Then: scripts/smoke-test.sh"

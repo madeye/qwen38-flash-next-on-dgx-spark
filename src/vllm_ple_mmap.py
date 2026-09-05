@@ -49,6 +49,7 @@ import glob
 import json
 import logging
 import math
+import mmap
 import os
 import re
 import struct
@@ -131,6 +132,10 @@ class MmapPleTable:
             self.mm[idx] = np.memmap(
                 path, dtype=np.uint8, mode="r", offset=offset, shape=(rows, row_bytes)
             )
+            # N-gram rows are scattered; sequential readahead wastes unified RAM.
+            # Keep an opt-out for matched performance measurements.
+            if os.environ.get("VLLM_PLE_MMAP_RANDOM", "1") == "1":
+                self.mm[idx]._mmap.madvise(mmap.MADV_RANDOM)
             self.rows_total += rows
         self.pool = ThreadPoolExecutor(max_workers=max(1, int(workers)))
         self.fast_rows = _env_int("VLLM_PLE_MMAP_FAST_ROWS", 512)
