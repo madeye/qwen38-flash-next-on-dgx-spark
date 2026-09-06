@@ -4,18 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Qwen3.8-Flash-Next on a single NVIDIA DGX Spark</title>
-<meta name="description" content="Validated serving configs for the 176B-parameter Qwen3.8-Flash-Next MoE on one DGX Spark: native 262k and YaRN 524k, FP8 KV, MTP=3, and concurrent benchmarks.">
+<meta name="description" content="Official NVIDIA NVFP4 Qwen3.8-Flash-Next on one DGX Spark: 43.5 tok/s median decode across 40 real prompts with staged PLE, MTP3, FP8 KV, and 262k context.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
-<meta property="og:description" content="176B MoE, 6B active — native 262k and YaRN 524k on one GB10 with FP8 KV, MTP=3, setup notes, and measured validation.">
+<meta property="og:description" content="Official NVIDIA NVFP4 on one GB10: 43.5 tok/s median decode across 40 real prompts, 0.26 s median TTFT, MTP3, FP8 KV, and 262k context.">
 <meta property="og:url" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/">
-<meta property="og:image" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/assets/social-card.png?v=20260906">
+<meta property="og:image" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/assets/social-card.png?v=20260906-tp1">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
-<meta name="twitter:description" content="176B MoE, 6B active — native 262k and YaRN 524k on one GB10 with FP8 KV, MTP=3, setup notes, and measured validation.">
-<meta name="twitter:image" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/assets/social-card.png?v=20260906">
+<meta name="twitter:description" content="Official NVIDIA NVFP4 on one GB10: 43.5 tok/s median decode across 40 real prompts, 0.26 s median TTFT, MTP3, FP8 KV, and 262k context.">
+<meta name="twitter:image" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/assets/social-card.png?v=20260906-tp1">
 <style>
   :root { --bg:#0d1117; --fg:#e6edf3; --dim:#8b949e; --green:#76b900; --chip:#161b22; --edge:#30363d; }
   * { box-sizing: border-box; }
@@ -45,35 +45,34 @@
 <body>
 <main>
   <h1>Qwen3.8-Flash-Next on a single DGX Spark</h1>
-  <p class="sub">176B-parameter MoE · 6B active · vLLM · NVFP4 + fp8 hybrid · MTP speculative decoding</p>
+  <p class="sub">Official NVIDIA NVFP4 · staged PLE · MTP3 · FP8 KV · decode CUDA graphs</p>
   <p class="dim">Field notes from serving
-    <a href="https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4">Qwen3.8-Flash-Next NVFP4</a>
+    <a href="https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4">NVIDIA's Qwen3.8-Flash-Next NVFP4 checkpoint</a>
     on one NVIDIA DGX Spark (GB10, 128 GB unified memory) with the
-    <a href="https://github.com/blazux/qwen3.8-Flash-DGX">qwen3.8-Flash-DGX</a> recipe.</p>
+    <a href="https://github.com/tonyd2wild/Qwen3.8-Flash-Next-NVFP4-DGX-Spark">single-Spark TP1 recipe</a>.</p>
 
-  <img class="card" src="assets/social-card.png?v=20260906" alt="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
+  <img class="card" src="assets/social-card.png?v=20260906-tp1" alt="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
 
-  <h2>Validated aligned profiles (2026-09-06)</h2>
-  <p>The compatible defaults now follow
-    <a href="https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark/tree/203834ca88000c8192112e396b80d886b522caa0">MiaAI-Lab's single-Spark config</a>:
-    MTP=3, 2,048-token prefill chunks, four scheduler slots, and explicit CUDA graph
-    widths. The RadixArk-specific mmap path keeps PIECEWISE graphs and a 9 GiB FP8 KV pool.</p>
+  <h2>Default NVIDIA TP1 recipe (validated 2026-09-06)</h2>
+  <p><code>scripts/serve.sh</code> runs the official NVIDIA checkpoint with the
+    pinned vLLM nightly, staged disk PLE gather, a 65,536-token reduced-vocabulary
+    MTP3 draft, six scheduler slots, a 4,096-token prefill chunk, FP8 KV,
+    262,144-token context, and decode-only CUDA graphs. Prefix caching is disabled.
+    The resulting full recipe is within 0.9% of the source recipe's 43.9 tok/s report.</p>
   <table>
     <tr><th>Profile / workload</th><th>Measured result</th></tr>
-    <tr><td>524k hybrid, short decode</td><td>24.7–32.9 tok/s</td></tr>
-    <tr><td>524k hybrid, 32k TTFT</td><td>25.5 s</td></tr>
-    <tr><td>524k hybrid, 500k TTFT</td><td>432.4 s · correct</td></tr>
-    <tr><td>Native NVFP4, 10.7k cold prefill</td><td>1,025 tok/s</td></tr>
-    <tr><td>Native NVFP4, four short requests</td><td>40.3 aggregate tok/s</td></tr>
-    <tr><td>Native NVFP4, four concurrent 60k prompts</td><td>158.2 s · 4/4 correct</td></tr>
+    <tr><td>40 real prompts, one stream</td><td><b>43.5 tok/s median decode</b></td></tr>
+    <tr><td>Median time to first token</td><td><b>0.26 s</b></td></tr>
+    <tr><td>Automatic task-format score</td><td>0.88</td></tr>
+    <tr><td>Coding / reasoning / JSON</td><td>44.5 / 46.6 / 47.1 tok/s</td></tr>
+    <tr><td>HTML / prose / narrative</td><td>48.2 / 29.4 / 28.9 tok/s</td></tr>
+    <tr><td>Summary / format</td><td>36.0 / 31.2 tok/s</td></tr>
   </table>
-  <p>All graph widths <code>[4,8,12,16]</code> captured successfully. The 9 GiB
-    cache holds 542,103 tokens, or 2.07 full 262k requests. The four-way 60k test
-    bottomed at 17.44 GiB MemAvailable; the 500k test bottomed at 20.55 GiB.
-    Neither profile restarted or OOMed. See the
-    <a href="config-alignment-test-2026-09-06.json">raw validation report</a>.</p>
+  <p>The server uses Docker's <code>unless-stopped</code> policy. The full raw
+    prompt-by-prompt result is available in the
+    <a href="performance-nvidia-tp1-2026-09-06.json">NVIDIA TP1 validation report</a>.</p>
 
-  <h2>Earlier baseline (single request, greedy)</h2>
+  <h2>Legacy RadixArk profiles</h2>
   <table>
     <tr><th>Metric</th><th>NVFP4</th><th>Hybrid (+fp8 side layers)</th></tr>
     <tr><td>Prefill, cold 10.7k prompt</td><td>1,042 tok/s</td><td>916 tok/s</td></tr>
@@ -83,24 +82,25 @@
   </table>
 
   <h2>How it fits in 128 GB</h2>
-  <p>The 122 GiB checkpoint holds a 44 GiB n-gram embedding table that each token only
-  reads 16 rows of. The patched vLLM image serves it from NVMe via <code>mmap</code>,
+  <p>The official checkpoint holds a 51B n-gram embedding table that each token only
+  reads 16 rows of. The patched vLLM image serves it from NVMe via staged <code>mmap</code>,
   so resident weights drop to ~76 GiB and the rest of the unified pool is KV cache.</p>
 
   <h2>Serving config</h2>
-  <pre><code>scripts/serve.sh        # native 262,144 · NVFP4 · 4 seqs
-scripts/serve-500k.sh   # YaRN 524,288 · hybrid · 1 seq
-# MTP=3 · FP8 KV · 2,048-token chunks · exact top-k
-# CUDA graph widths: [4,8,12,16] for the native profile</code></pre>
+  <pre><code>scripts/serve.sh          # NVIDIA TP1 · native 262,144 · 6 seqs
+# MTP=3 · FP8 KV · 4,096-token chunks · staged PLE
+# decode CUDA graph widths: [4,8,12,16,20,24]
+scripts/serve-500k.sh     # legacy YaRN 524,288 · hybrid · 1 seq</code></pre>
 
   <h2>Serving it to other machines</h2>
   <p><code>scripts/serve.sh</code> publishes an unauthenticated API on all interfaces.
-  <code>scripts/serve-public.sh</code> pins vLLM to loopback and fronts it with a small
+  The older <code>scripts/serve-public.sh</code> keeps the legacy RadixArk profile on loopback and fronts it with a small
   gateway: bearer auth on <code>/v1/*</code> and <code>/metrics</code>, 404 on everything
   else, streaming passed through untouched. Keys live in the gateway, so rotating one
   takes effect on the next request instead of restarting a container that loads
   ~76 GiB of weights.</p>
-  <pre><code>scripts/serve-public.sh   # container on 127.0.0.1:18300, gateway on 0.0.0.0:8080</code></pre>
+  <pre><code>scripts/serve.sh          # default NVIDIA TP1 service on :18300
+scripts/serve-public.sh   # legacy container on 127.0.0.1:18300, gateway on :8080</code></pre>
   <p>The admin dashboard it serves at <code>/</code> shows upstream health and the served
   model, edits the advertised API base URL, and creates, reveals, rotates and revokes keys
   with per-key request counts.</p>

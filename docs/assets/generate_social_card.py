@@ -33,13 +33,13 @@ f_url = ImageFont.truetype(FM, 24)
 
 x = 80
 d.text((x, 90), "Qwen3.8-Flash-Next", font=f_title, fill=FG)
-d.text((x, 190), "176B MoE on a single NVIDIA DGX Spark", font=f_sub, fill=GREEN)
-d.text((x, 245), "vLLM · NVFP4 + fp8 hybrid · MTP speculative decoding", font=f_sub, fill=DIM)
+d.text((x, 190), "Official NVIDIA NVFP4 on a single DGX Spark", font=f_sub, fill=GREEN)
+d.text((x, 245), "staged PLE · MTP3 · FP8 KV · 262k context", font=f_sub, fill=DIM)
 
-stats = [("125B+51B", "params · 6B active"),
-         ("21.6 tok/s", "decode · single stream"),
+stats = [("43.5 tok/s", "median decode · 40 prompts"),
+         ("0.26 s", "median TTFT"),
          ("262k", "native context"),
-         ("128 GB", "unified GB10 memory")]
+         ("1× GB10", "128 GB unified memory")]
 cx, cy = x, 350
 for value, label in stats:
     tw = d.textlength(value, font=f_stat)
