@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# Serve Qwen3.8-Flash-Next on a single DGX Spark / GB10 with the PLE table mmapped
+# from disk. OpenAI-compatible API on $PORT.
+#
+#   scripts/serve-legacy.sh                   # RadixArk NVFP4 checkpoint, 262k ctx
+#   MODE=hybrid scripts/serve-legacy.sh       # NVFP4 experts + fp8 side layers (scripts/prepare-hybrid.sh first)
+#   YARN=1 CTX=500000 scripts/serve-legacy.sh # 500k context via YaRN (validated)
+#   docker logs -f qwen38-flash               # wait for "Application startup complete"
+#
+# Tunables (env):
+#   MODE=nvfp4        nvfp4 = the checkpoint as published (side layers bf16)
+#                     hybrid = side layers in blockwise fp8: +20% decode, +15-20% KV, same
+#                     tournament score. Needs the one-time scripts/prepare-hybrid.sh
+#   PREFIX_CACHE=1    1 = --enable-prefix-caching (correct with this image's block_size fix;
+#                     repeated prefixes — system prompts, multi-turn, tool loops — skip the prefill)
+#   EXACT_TOPK=1      1 = exact, deterministic QSA top-k (identical output at temperature 0;
+#                     costs ~10-40% on long prefills). 0 = stock kernel (faster, non-deterministic)
+#   PORT=18300        host port for the API
+#   BIND_ADDR=0.0.0.0 host interface the port is published on. The API has no auth of
+#                     its own, so 0.0.0.0 exposes an unauthenticated model to the LAN.
+#                     scripts/serve-public.sh sets 127.0.0.1 and fronts it with the gateway
+#   CTX=262144        max context length (native). With YARN=1 up to ~500000 (see README)
+#   YARN=0            1 = YaRN rope scaling (factor CTX / 262144) for CTX > 262144
+#   SEQS=4            max concurrent sequences. Do NOT leave this at 1-2 when measuring
+#                     throughput: requests queue silently and aggregate tok/s flatlines
+#   GPU_MEM=0.85      fraction of the 128 GB pool for weights+KV (0.875 got OOM-killed
+#                     on a 300k prefill with MTP — keep the margin; 0.80 for long-running service)
+#   MTP=3             speculative tokens from the model's MTP head (0 = off)
+#   KV_DTYPE=fp8_e4m3 auto (=bf16) or fp8_e4m3. fp8_e4m3 stores the QSA K/V pages in
+#                     float8_e4m3 and dequantizes in-kernel: 45.7% less KV per token
+#                     (28.4 -> 15.4 KiB), at ~14% slower single-stream decode.
+#                     Auto-sets VLLM_QSA_FP8_KV=1
+#   PREWARM=0         1 = stream the 48 GiB table once at boot to warm the page cache
+#   WORKERS=32        threads for the mmap gather
+#   KV_BYTES=9663676416 9 GiB explicit KV pool; bypasses GPU_MEM KV sizing (empty = auto-size)
+#   MAX_NUM_BATCHED_TOKENS=2048 prefill chunk width (8192 for the earlier single-stream profile)
+#   CUDAGRAPH_CAPTURE_SIZES=auto (1+MTP)*S for S=1..SEQS; empty = vLLM defaults
+#                     or a comma-separated list of positive capture widths
+#   DRY_RUN=0        1 = print launch without stopping or starting containers
+#   EXTRA=            extra vllm flags passed verbatim
+#   IMAGE=qwen38-flash-dgx   MODEL=RadixArk/Qwen3.8-Flash-Next-NVFP4
+set -euo pipefail
+
+NAME="${NAME:-qwen38-flash}"
+IMAGE="${IMAGE:-qwen38-flash-dgx}"
+MODEL="${MODEL:-RadixArk/Qwen3.8-Flash-Next-NVFP4}"
+HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
+MODE="${MODE:-nvfp4}"
+PREFIX_CACHE="${PREFIX_CACHE:-1}"
+EXACT_TOPK="${EXACT_TOPK:-1}"
+PORT="${PORT:-18300}"
+BIND_ADDR="${BIND_ADDR:-0.0.0.0}"
+CTX="${CTX:-262144}"
+YARN="${YARN:-0}"
+SEQS="${SEQS:-4}"
+GPU_MEM="${GPU_MEM:-0.85}"
+MTP="${MTP:-3}"
+KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"
+PREWARM="${PREWARM:-0}"
+EXTRA="${EXTRA:-}"
+KV_BYTES="${KV_BYTES-9663676416}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-2048}"
+CUDAGRAPH_CAPTURE_SIZES="${CUDAGRAPH_CAPTURE_SIZES-auto}"
+
+for setting in SEQS MAX_NUM_BATCHED_TOKENS; do
+  [[ "${!setting}" =~ ^[1-9][0-9]*$ ]] || { echo "!! $setting must be a positive integer"; exit 1; }
+done
+[[ "$MTP" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "!! MTP must be a non-negative integer"; exit 1; }
+
+if ! [[ "$CTX" =~ ^[1-9][0-9]*$ ]] || (( CTX > 524288 )); then
+  echo "!! CTX must be a positive integer at or below 524288"; exit 1
+fi
+if [[ "$YARN" != 0 && "$YARN" != 1 ]]; then
+  echo "!! YARN must be 0 or 1"; exit 1
+fi
+if (( CTX > 262144 )) && [[ "$YARN" != 1 ]]; then
+  echo "!! CTX above 262144 requires YARN=1"; exit 1
+fi
+
+# Resolve the local snapshot directory and map it to the in-container mount.
+REPO_DIR="$HF_CACHE/hub/models--${MODEL//\//--}"
+SNAP_HOST="$(ls -d "$REPO_DIR"/snapshots/*/ 2>/dev/null | grep -v -- '-fp8hybrid' | head -1 || true)"
+if [ -z "$SNAP_HOST" ]; then
+  echo "!! checkpoint not found under $REPO_DIR"
+  echo "   run scripts/download-weights.sh first."
+  exit 1
+fi
+SNAP_NAME="$(basename "$SNAP_HOST")"
+HYBRID_ENV=()
+case "$MODE" in
+  nvfp4) ;;
+  hybrid)
+    if [ ! -f "$REPO_DIR/snapshots/${SNAP_NAME}-fp8hybrid/.prepared" ]; then
+      echo "!! hybrid checkpoint not prepared: run scripts/prepare-hybrid.sh first (one-time, ~10 min)"
+      exit 1
+    fi
+    SNAP_NAME="${SNAP_NAME}-fp8hybrid"
+    HYBRID_ENV=(-e VLLM_FP8_HYBRID=1 -e VLLM_USE_DEEP_GEMM=0)
+    ;;
+  *) echo "!! MODE must be nvfp4 or hybrid"; exit 1 ;;
+esac
+SNAP_IN="/hf/hub/models--${MODEL//\//--}/snapshots/$SNAP_NAME"
+
+# The PLE gather is a CPU op + a pageable host->device copy: it MUST run outside
+# CUDA graphs. We declare it a splitting op and use PIECEWISE capture (never FULL*).
+SPLIT='["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::qwen3_8_flash_next_ple_short_conv","vllm::qwen3_8_flash_next_qsa_with_output","vllm::linear_attention","vllm::qwen_gdn_attention_core","vllm::qwen_gdn_attention_core_fused_norm_packed","vllm::sparse_attn_indexer","vllm::ple_mmap_lookup"]'
+CC="${CC:--cc.cudagraph_mode=PIECEWISE -cc.splitting_ops=$SPLIT}"
+
+# Include each speculative verify width, including 12 at MTP=3 / SEQS=4.
+# Keep PIECEWISE and the PLE splitting op: our CPU mmap lookup is not full-graph safe.
+GRAPH_ARGS=()
+if [[ -n "$CUDAGRAPH_CAPTURE_SIZES" ]]; then
+  GRAPH_SIZES=$(python3 - "$CUDAGRAPH_CAPTURE_SIZES" "$MTP" "$SEQS" <<'PYGRAPH'
+import json, re, sys
+value, mtp, seqs = sys.argv[1:]
+if value == "auto":
+    sizes = [(int(mtp) + 1) * s for s in range(1, int(seqs) + 1)]
+else:
+    if not re.fullmatch(r"[1-9][0-9]*(,[1-9][0-9]*)*", value):
+        raise SystemExit("CUDAGRAPH_CAPTURE_SIZES must be auto, empty, or comma-separated positive integers")
+    sizes = sorted(set(map(int, value.split(","))))
+print(json.dumps(sizes, separators=(",", ":")))
+PYGRAPH
+)
+  GRAPH_ARGS=("-cc.cudagraph_capture_sizes=$GRAPH_SIZES")
+fi
+
+# YaRN scaling to go past the native 262144.
+OVR_ARGS=()
+# Only override scaling fields; preserve the checkpoint's multimodal rope fields.
+YARN_OVR="$(python3 - "$CTX" <<'PY'
+import json, sys
+print(json.dumps({"text_config": {"rope_parameters": {
+    "rope_type": "yarn", "factor": max(1.0, int(sys.argv[1]) / 262144),
+    "original_max_position_embeddings": 262144}}}))
+PY
+)"
+ALLOW_LONG=0
+if [ "$YARN" != 0 ]; then OVR_ARGS=(--hf-overrides "$YARN_OVR"); ALLOW_LONG=1; fi
+
+# MTP + YaRN: dict hf_overrides are not propagated to the draft model, whose
+# max_model_len then stays 262144 and vLLM aborts with
+# "--mamba-block-size can only be set with --enable-prefix-caching". Forcing the
+# draft's max_model_len through the speculative config fixes it.
+SPEC=()
+if [ "$MTP" != 0 ]; then
+  if [ "$YARN" != 0 ]; then
+    SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP},\"max_model_len\":${CTX}}")
+  else
+    SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP}}")
+  fi
+fi
+
+# fp8 KV needs the QSA guard relaxation as well as the vLLM flag.
+FP8KV_ENV=()
+case "$KV_DTYPE" in fp8*) FP8KV_ENV=(-e VLLM_QSA_FP8_KV=1) ;; esac
+
+PC_ARG=--no-enable-prefix-caching
+[ "$PREFIX_CACHE" = 1 ] && PC_ARG=--enable-prefix-caching
+
+KV_ARGS=()
+if [[ -n "$KV_BYTES" ]]; then
+  [[ "$KV_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "!! KV_BYTES must be a positive integer"; exit 1; }
+  KV_ARGS=(--kv-cache-memory "$KV_BYTES")
+fi
+if [[ "${DRY_RUN:-0}" == 1 ]]; then
+  docker() { printf '%q ' "$@"; printf '\n'; }
+else
+  if docker container inspect "$NAME" >/dev/null 2>&1; then
+    docker stop -t 60 "$NAME" >/dev/null
+    docker rm "$NAME" >/dev/null
+  fi
+fi
+# shellcheck disable=SC2086
+docker run -d --name "$NAME" --restart unless-stopped \
+  --gpus all --ipc=host --shm-size 16g -p "${BIND_ADDR}:${PORT}:8000" \
+  -v "$HF_CACHE:/hf" -e HF_HOME=/hf -e HF_HUB_OFFLINE=1 \
+  -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" \
+  -e VLLM_PLE_MMAP_RANDOM="${VLLM_PLE_MMAP_RANDOM:-1}" \
+  -e VLLM_QSA_EXACT_TOPK="$EXACT_TOPK" \
+  "${FP8KV_ENV[@]}" \
+  -e VLLM_USE_FLASHINFER_SAMPLER=1 -e VLLM_ALLOW_LONG_MAX_MODEL_LEN="$ALLOW_LONG" \
+  "${HYBRID_ENV[@]}" \
+  "$IMAGE" \
+  "$SNAP_IN" --served-model-name qwen3.8-flash-next \
+    --host 0.0.0.0 --port 8000 --load-format safetensors \
+    --max-model-len "$CTX" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GPU_MEM" \
+    $PC_ARG --enable-chunked-prefill --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
+    $CC "${GRAPH_ARGS[@]}" \
+    --no-enable-flashinfer-autotune \
+    --kv-cache-dtype "$KV_DTYPE" \
+    "${KV_ARGS[@]}" \
+    "${OVR_ARGS[@]}" $EXTRA \
+    --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3 \
+    "${SPEC[@]}"
+
+echo ">> $NAME starting on ${BIND_ADDR}:$PORT (model 'qwen3.8-flash-next', mode=$MODE, ctx $CTX, yarn=$YARN, mtp=$MTP, seqs=$SEQS, prefix_cache=$PREFIX_CACHE, exact_topk=$EXACT_TOPK, kv_dtype=$KV_DTYPE)"
+echo ">> first boot loads ~76 GiB of weights (~8-13 min). Follow:  docker logs -f $NAME"
+echo ">> ready when the log says 'Application startup complete'. Then: scripts/smoke-test.sh"

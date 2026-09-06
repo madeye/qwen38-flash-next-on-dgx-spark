@@ -6,7 +6,7 @@
 # token, so halving them is what buys the +20% decode and the extra KV.
 #
 #   scripts/prepare-hybrid.sh        # ~10 min, needs ~13 GB more disk
-#   MODE=hybrid scripts/serve.sh
+#   MODE=hybrid scripts/serve-legacy.sh
 #
 # Layout: a sibling of the HF snapshot, <snapshot>-fp8hybrid/, made of the same
 # relative symlinks into blobs/ (so it resolves inside the container under /hf) — only
@@ -48,4 +48,4 @@ chmod 644 '$DST_IN'/*.safetensors '$DST_IN'/model.safetensors.index.json
 touch '$DST_IN/.prepared'
 echo \">> done: \$n fp8 side-layer tensors\"
 "
-echo ">> hybrid checkpoint ready. Serve with:  MODE=hybrid scripts/serve.sh"
+echo ">> hybrid checkpoint ready. Serve with: MODE=hybrid scripts/serve-legacy.sh"

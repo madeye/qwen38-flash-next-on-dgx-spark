@@ -4,6 +4,35 @@ Field notes from bringing up **Qwen3.8-Flash-Next** — a ~176B-parameter multim
 MoE (125B main + 51B n-gram embedding table, 6B active per token) — on **one**
 DGX Spark / GB10, using vLLM with the model's built-in MTP speculative decoding.
 
+The default recipe is adapted from
+[tonyd2wild/Qwen3.8-Flash-Next-NVFP4-DGX-Spark](https://github.com/tonyd2wild/Qwen3.8-Flash-Next-NVFP4-DGX-Spark)
+at `d83f10c`, with its Apache-licensed vLLM patch set vendored under
+[`src/full-recipe-patch/`](src/full-recipe-patch/). The earlier recipe source,
+[blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX),
+remains available through the explicit legacy launchers.
+
+## Default NVIDIA TP1 recipe (2026-09-06)
+
+`bash scripts/serve.sh` starts the validated single-Spark NVIDIA recipe against
+the official `nvidia/Qwen3.8-Flash-Next-NVFP4` checkpoint at
+`/var/tmp/models/Qwen3.8-Flash-Next-NVFP4-nvidia`. It uses the pinned vLLM
+nightly `8a728663`, staged disk PLE gather, a 65,536-token MTP3 draft vocabulary,
+six sequences, 4,096-token prefill chunks, FP8 KV, 262,144 context tokens,
+`gpu-memory-utilization=0.80`, decode-only CUDA graphs, and disabled prefix
+caching. The service uses Docker's `unless-stopped` policy, so it returns when
+the Docker daemon restarts.
+
+The measured 40-prompt median was **43.5 tok/s** with **0.26 s** median TTFT
+and a 0.88 automatic task score. The GPU is locked to its supported 3,003 MHz
+ceiling; sustained decode reaches 2,535 MHz on this host. Use
+`scripts/serve-legacy.sh` or `scripts/serve-500k.sh` only for the older
+RadixArk/hybrid and 500k-context profiles.
+
+The recipe files
+(`Dockerfile`, `src/`, `tools/`, `scripts/`) for the legacy stack are **vendored
+in this repo** so it is self-contained; they remain Apache-2.0 © blazux (see
+`LICENSE`).
+
 Recipe source: [blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)
 (patched official vLLM image `vllm/vllm-openai:qwen38-flash-next`). The recipe files
 (`Dockerfile`, `src/`, `tools/`, `scripts/`) are **vendored in this repo** so it is
@@ -12,11 +41,11 @@ self-contained; they remain Apache-2.0 © blazux (see `LICENSE`).
 part of that recipe.
 Checkpoint: [RadixArk/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4).
 
-## Serving config alignment (2026-09-05)
+## Legacy RadixArk config alignment (2026-09-05)
 
 Compatible defaults follow MiaAI-Lab's
 [config at commit 203834c](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark/blob/203834ca88000c8192112e396b80d886b522caa0/.env.sample).
-The base launcher uses native 262,144 context (YaRN off), MTP=3, four concurrent
+The legacy launcher uses native 262,144 context (YaRN off), MTP=3, four concurrent
 sequences, FP8 KV, and 2,048-token prefill chunks. `MAX_NUM_BATCHED_TOKENS=8192`
 selects the larger chunks used in our earlier benchmarks.
 
@@ -138,7 +167,7 @@ and were not rerun for this refresh.
 ### Default FP8 KV profile and BF16 comparison
 
 ```bash
-bash scripts/serve-500k.sh       # FP8 by default; serve-500k-fp8.sh is an explicit alias
+bash scripts/serve-500k.sh       # legacy FP8 profile; serve-500k-fp8.sh is an explicit alias
 # Restore the BF16 profile:
 bash scripts/serve-500k-bf16.sh
 ```
@@ -194,14 +223,13 @@ image serves it from NVMe via `mmap` instead of keeping it resident:
 ```bash
 git clone https://github.com/madeye/qwen38-flash-next-on-dgx-spark.git
 cd qwen38-flash-next-on-dgx-spark
-docker build -t qwen38-flash-dgx .
-hf download RadixArk/Qwen3.8-Flash-Next-NVFP4   # ~122 GiB, resumable
-scripts/serve.sh            # MODE=nvfp4, MTP=3, prefix caching, exact top-k
+scripts/download-weights.sh  # official NVIDIA checkpoint, ~124 GiB, resumable
+scripts/serve.sh             # default NVIDIA TP1 recipe
 scripts/smoke-test.sh
-scripts/serve-public.sh     # optional: loopback vLLM + authenticating gateway on :8080
+scripts/serve-public.sh     # optional legacy loopback vLLM + authenticated gateway
 ```
 
-`scripts/serve.sh` defaults: native 262,144-token context, MTP=3 speculative tokens,
+`scripts/serve-legacy.sh` defaults: native 262,144-token context, MTP=3 speculative tokens,
 `--enable-prefix-caching`, deterministic exact QSA top-k, 4 concurrent sequences,
 `--gpu-memory-utilization 0.85`, PIECEWISE CUDA graphs (the mmap'd PLE gather is a
 splitting op), automatic graph capture widths, 2,048-token prefill chunks,
@@ -336,6 +364,6 @@ MTP head, enabled in vLLM with
 
 - One big model at a time — this uses most of the 128 GB pool.
 - 1M context is out of reach on one box; 500k with YaRN is the validated ceiling
-  (`YARN=1 CTX=500000 GPU_MEM=0.80 scripts/serve.sh`).
+  (`YARN=1 CTX=500000 GPU_MEM=0.80 scripts/serve-legacy.sh`).
 - The stock GB10 `persistent_topk` kernel is non-deterministic — the image's
   `EXACT_TOPK=1` default fixes it at some long-prefill cost.

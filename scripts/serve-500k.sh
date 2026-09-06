@@ -11,4 +11,4 @@ export GPU_MEM="${GPU_MEM:-0.80}" KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"
 # tokens while leaving memory for hybrid weights, MTP and desktop processes.
 export KV_BYTES="${KV_BYTES-9663676416}"
 export BIND_ADDR="${BIND_ADDR:-127.0.0.1}"
-exec bash scripts/serve.sh
+exec bash scripts/serve-legacy.sh

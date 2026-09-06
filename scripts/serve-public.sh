@@ -7,10 +7,10 @@
 #
 # The container's API port is published on 127.0.0.1 only, so vLLM never faces the
 # network; gateway.py does, and every request to it needs a bearer key from the
-# dashboard. Every variable scripts/serve.sh understands (MODE, CTX, MTP, SEQS, ...)
+# dashboard. Every variable scripts/serve-legacy.sh understands (MODE, CTX, MTP, SEQS, ...)
 # is passed straight through.
 #
-# Ctrl-C stops the gateway, not the container: scripts/serve.sh runs it detached with
+# Ctrl-C stops the gateway, not the container: scripts/serve-legacy.sh runs it detached with
 # --restart unless-stopped, and a ~10-minute weight load is not something to throw away
 # on a terminal hangup. Stop it explicitly with `docker rm -f $NAME`.
 set -euo pipefail
@@ -35,7 +35,7 @@ if curl -sf --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
   esac
 else
   echo ">> starting $NAME on 127.0.0.1:${PORT}"
-  BIND_ADDR=127.0.0.1 PORT="$PORT" NAME="$NAME" scripts/serve.sh
+  BIND_ADDR=127.0.0.1 PORT="$PORT" NAME="$NAME" scripts/serve-legacy.sh
   printf '>> waiting for the model to load'
   deadline=$((SECONDS + READY_TIMEOUT))
   until curl -sf --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; do

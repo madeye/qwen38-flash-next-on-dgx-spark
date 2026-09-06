@@ -15,13 +15,16 @@ class ServeConfigTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         cache = Path(self.temp.name)
+        model = cache / 'official-nvidia-checkpoint'
+        model.mkdir()
+        (model / 'config.json').write_text('{}')
         snapshot = cache / 'hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/test'
         snapshot.mkdir(parents=True)
         hybrid = snapshot.with_name('test-fp8hybrid')
         hybrid.mkdir()
         (hybrid / '.prepared').touch()
         self.env = {'PATH': os.environ['PATH'], 'HOME': str(cache),
-                    'HF_CACHE': str(cache), 'DRY_RUN': '1'}
+                    'HF_CACHE': str(cache), 'MODEL_HOST': str(model), 'DRY_RUN': '1'}
 
     def launch(self, script='serve.sh', **overrides):
         result = subprocess.run(['bash', str(ROOT / 'scripts' / script)],
@@ -32,17 +35,21 @@ class ServeConfigTest(unittest.TestCase):
 
     def test_base_profile(self):
         args = self.launch()
-        for flag, value in {'--max-model-len': '262144', '--max-num-seqs': '4',
-                            '--max-num-batched-tokens': '2048',
+        for flag, value in {'--max-model-len': '262144', '--max-num-seqs': '6',
+                            '--max-num-batched-tokens': '4096',
                             '--kv-cache-dtype': 'fp8_e4m3',
-                            '--kv-cache-memory': '9663676416'}.items():
+                            '--gpu-memory-utilization': '0.80'}.items():
             self.assertEqual(args[args.index(flag) + 1], value)
-        self.assertIn('-cc.cudagraph_capture_sizes=[4,8,12,16]', args)
-        self.assertIn('-cc.cudagraph_mode=PIECEWISE', args)
-        self.assertTrue(any('vllm::ple_mmap_lookup' in arg for arg in args))
+        self.assertIn('--network', args)
+        self.assertEqual(args[args.index('--network') + 1], 'host')
+        self.assertIn('--no-enable-prefix-caching', args)
+        graph = json.loads(args[args.index('--compilation-config') + 1])
+        self.assertEqual(graph['cudagraph_mode'], 'FULL_DECODE_ONLY')
+        self.assertEqual(graph['cudagraph_capture_sizes'], [4, 8, 12, 16, 20, 24])
+        self.assertTrue(any('full-recipe-patch/ple_layer.py' in arg for arg in args))
         self.assertEqual(json.loads(args[args.index('--speculative-config') + 1])
                          ['num_speculative_tokens'], 3)
-        self.assertNotIn('--hf-overrides', args)
+        self.assertEqual(args[args.index('--served-model-name') + 1], 'qwen3.8-flash-next')
 
     def test_long_context_profiles(self):
         for script, dtype, pool in [('serve-500k.sh', 'fp8_e4m3', '9663676416'),
@@ -58,23 +65,18 @@ class ServeConfigTest(unittest.TestCase):
                 self.assertEqual(spec['max_model_len'], 524288)
 
     def test_overrides_and_no_mtp(self):
-        args = self.launch(MTP='0', SEQS='3', MAX_NUM_BATCHED_TOKENS='8192')
-        self.assertNotIn('--speculative-config', args)
-        self.assertIn('-cc.cudagraph_capture_sizes=[1,2,3]', args)
+        args = self.launch(MTP='4', SEQS='3', CHUNK='8192', CAPTURE_SIZES='16,4,12,4', PREFIX_CACHE='1')
         self.assertEqual(args[args.index('--max-num-batched-tokens') + 1], '8192')
-        args = self.launch(CUDAGRAPH_CAPTURE_SIZES='16,4,12,4')
-        self.assertIn('-cc.cudagraph_capture_sizes=[4,12,16]', args)
-        for script in ['serve.sh', 'serve-500k.sh', 'serve-500k-fp8.sh', 'serve-500k-bf16.sh']:
-            args = self.launch(script, CUDAGRAPH_CAPTURE_SIZES='', KV_BYTES='')
-            self.assertFalse(any('cudagraph_capture_sizes=' in arg for arg in args))
-            self.assertNotIn('--kv-cache-memory', args)
+        self.assertIn('--enable-prefix-caching', args)
+        self.assertEqual(json.loads(args[args.index('--compilation-config') + 1])
+                         ['cudagraph_capture_sizes'], [16, 4, 12, 4])
+        args = self.launch(CAPTURE_SIZES='')
+        self.assertNotIn('cudagraph_capture_sizes', args[args.index('--compilation-config') + 1])
 
     def test_invalid_settings(self):
-        for overrides in [{'SEQS': '0'}, {'MTP': '-1'}, {'MTP': '03'},
-                          {'MAX_NUM_BATCHED_TOKENS': 'bad'},
-                          {'CUDAGRAPH_CAPTURE_SIZES': '4,0'},
-                          {'CUDAGRAPH_CAPTURE_SIZES': '4,broken'},
-                          {'CTX': '524288', 'YARN': '0'}]:
+        for overrides in [{'SEQS': '0'}, {'MTP': '0'}, {'MTP': '03'},
+                          {'CHUNK': 'bad'}, {'CAPTURE_SIZES': '4,0'},
+                          {'CAPTURE_SIZES': '4,broken'}, {'PREFIX_CACHE': 'yes'}]:
             with self.subTest(overrides=overrides):
                 result = subprocess.run(['bash', str(ROOT / 'scripts/serve.sh')],
                                         env={**self.env, **overrides},
