@@ -1,0 +1,239 @@
+{
+  "timestamp_utc": "2026-09-10T11:21:31.015277+00:00",
+  "configuration": {
+    "tp": 1,
+    "mtp": 3,
+    "dflash": false,
+    "draft_vocab": 47149,
+    "ssm": "bfloat16",
+    "kv": "fp8_e4m3",
+    "max_context": 262144,
+    "max_sequences": 6,
+    "gpu_memory_utilization": 0.7535,
+    "prefix_cache": false
+  },
+  "samples": [
+    {
+      "name": "prose-1",
+      "prompt_tokens": 41,
+      "output_tokens": 384,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 0.2363,
+      "decode_tokens_per_second": 35.65,
+      "wall_seconds": 10.9805,
+      "end_to_end_tokens_per_second": 34.97,
+      "text": "Database transactions are fundamental mechanisms designed to ensure data integrity, particularly in concurrent environments where multiple users or processes access the same data simultaneously. One of the most critical anomalies they prevent is the \"lost update\" problem. A lost update occurs when two transactions read the same data, modify it, and write it back, causing the second transaction to overwrite the first transaction\u2019s changes, effectively losing the first update.\n\nTo understand how transactions prevent this, consider a concrete example involving a bank account with a balance of $100. Two clients, Alice and Bob, attempt to withdraw $10 simultaneously. Without proper transaction control, the following race condition might occur:\n1. Alice reads the balance ($100).\n2. Bob reads the balance ($100).\n3. Alice calculates the new balance ($100 - $10 = $90) and writes it to the database.\n4. Bob calculates the new balance ($100 - $10 = $90) and writes it to the database.\n\nThe final balance is $90, but it should be $80. Alice\u2019s update was lost because Bob\u2019s write overwrote it based on stale data.\n\nTransactions prevent this through the ACID properties, specifically **Isolation**. Isolation ensures that concurrent transactions do not interfere with each other. The database management system (DBMS) uses locking mechanisms or multi-version concurrency control (MVCC) to enforce this. In the example above, when Alice begins her transaction and reads the balance, the DBMS may place a lock on that row. Bob\u2019s transaction must wait until Alice\u2019s transaction commits or rolls back before he can read or write that data. Once Alice commits, Bob reads the updated balance ($90), calculates his new balance ($80), and writes it. The final result is correct.\n\nHowever, the strength of"
+    },
+    {
+      "name": "code-1",
+      "prompt_tokens": 37,
+      "output_tokens": 384,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 0.1923,
+      "decode_tokens_per_second": 44.12,
+      "wall_seconds": 8.8724,
+      "end_to_end_tokens_per_second": 43.28,
+      "text": "```python\nfrom typing import List, Tuple\n\n\ndef merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:\n    \"\"\"\n    Merge overlapping closed intervals.\n    \n    Algorithm:\n    1. Sort intervals by their start point.\n    2. Initialize an empty list to hold merged intervals.\n    3. Iterate through the sorted intervals:\n       - If the current interval overlaps with the last merged interval\n         (i.e., current start <= last merged end), merge them by updating\n         the end of the last merged interval to be the max of both ends.\n       - Otherwise, add the current interval as a new merged interval.\n    4. Return the list of merged intervals.\n    \n    Time Complexity: O(n log n) due to sorting.\n    Space Complexity: O(n) for the output list.\n    \n    Args:\n        intervals: A list of tuples representing closed intervals [start, end].\n        \n    Returns:\n        A list of merged, non-overlapping closed intervals sorted by start point.\n    \"\"\"\n    if not intervals:\n        return []\n    \n    # Sort intervals by start point\n    sorted_intervals = sorted(intervals, key=lambda x: x[0])\n    \n    merged: List[Tuple[int, int]] = []\n    \n    for current_start, current_end in sorted_intervals:\n        # If merged is empty or no overlap, add new interval\n        if not merged or current_start > merged[-1][1]:\n            merged.append((current_start, current_end))\n        else:\n            # Overlap: merge by extending the end if needed\n            merged[-1] = (merged[-1][0], max(merged[-1][1], current_end))\n    \n    return merged\n\n\n#"
+    },
+    {
+      "name": "code-2",
+      "prompt_tokens": 37,
+      "output_tokens": 384,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 0.2411,
+      "decode_tokens_per_second": 45.81,
+      "wall_seconds": 8.6028,
+      "end_to_end_tokens_per_second": 44.64,
+      "text": "```python\nfrom typing import List, Tuple\n\n\ndef merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:\n    \"\"\"\n    Merge overlapping closed intervals.\n    \n    Algorithm:\n    1. Sort intervals by their start point.\n    2. Initialize an empty list to hold merged intervals.\n    3. Iterate through the sorted intervals:\n       - If the current interval overlaps with the last merged interval\n         (i.e., current start <= last merged end), merge them by updating\n         the end of the last merged interval to be the max of both ends.\n       - Otherwise, add the current interval as a new merged interval.\n    4. Return the list of merged intervals.\n    \n    Time Complexity: O(n log n) due to sorting.\n    Space Complexity: O(n) for the output list.\n    \n    Args:\n        intervals: A list of tuples representing closed intervals [start, end].\n        \n    Returns:\n        A list of merged, non-overlapping closed intervals sorted by start point.\n    \"\"\"\n    if not intervals:\n        return []\n    \n    # Sort intervals by start point\n    sorted_intervals = sorted(intervals, key=lambda x: x[0])\n    \n    merged: List[Tuple[int, int]] = []\n    \n    for current_start, current_end in sorted_intervals:\n        # If merged is empty or no overlap, add new interval\n        if not merged or current_start > merged[-1][1]:\n            merged.append((current_start, current_end))\n        else:\n            # Overlap: merge by extending the end if needed\n            merged[-1] = (merged[-1][0], max(merged[-1][1], current_end))\n    \n    return merged\n\n\n#"
+    },
+    {
+      "name": "prose-2",
+      "prompt_tokens": 41,
+      "output_tokens": 384,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 0.2501,
+      "decode_tokens_per_second": 36.97,
+      "wall_seconds": 10.6086,
+      "end_to_end_tokens_per_second": 36.2,
+      "text": "Database transactions are fundamental mechanisms designed to ensure data integrity, particularly in concurrent environments where multiple users or processes access the same data simultaneously. One of the most critical anomalies they prevent is the \"lost update\" problem. A lost update occurs when two transactions read the same data, modify it, and write it back, causing the second transaction to overwrite the first transaction\u2019s changes, effectively losing the first update.\n\nTo understand how transactions prevent this, consider a concrete example involving a bank account with a balance of $100. Two clients, Alice and Bob, attempt to withdraw $10 simultaneously. Without proper transaction control, the following race condition might occur:\n1. Alice reads the balance ($100).\n2. Bob reads the balance ($100).\n3. Alice calculates the new balance ($100 - $10 = $90) and writes it to the database.\n4. Bob calculates the new balance ($100 - $10 = $90) and writes it to the database.\n\nThe final balance is $90, but it should be $80. Alice\u2019s update was lost because Bob\u2019s write overwrote it based on stale data.\n\nTransactions prevent this through the ACID properties, specifically **Isolation**. Isolation ensures that concurrent transactions do not interfere with each other. The database management system (DBMS) uses locking mechanisms or multi-version concurrency control (MVCC) to enforce this. In the example above, when Alice begins her transaction and reads the balance, the DBMS may place a lock on that row. Bob\u2019s transaction must wait until Alice\u2019s transaction commits or rolls back before he can read or write that data. Once Alice commits, Bob reads the updated balance ($90), calculates his new balance ($80), and writes it. The final result is correct.\n\nHowever, the strength of"
+    },
+    {
+      "name": "prose-3",
+      "prompt_tokens": 41,
+      "output_tokens": 384,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 0.2014,
+      "decode_tokens_per_second": 36.83,
+      "wall_seconds": 10.5993,
+      "end_to_end_tokens_per_second": 36.23,
+      "text": "Database transactions are fundamental mechanisms designed to ensure data integrity, particularly in concurrent environments where multiple users or processes access the same data simultaneously. One of the most critical anomalies they prevent is the \"lost update\" problem. A lost update occurs when two transactions read the same data, modify it, and write it back, causing the second transaction to overwrite the first transaction\u2019s changes, effectively losing the first update.\n\nTo understand how transactions prevent this, consider a concrete example involving a bank account with a balance of $100. Two clients, Alice and Bob, attempt to withdraw $10 simultaneously. Without proper transaction control, the following race condition might occur:\n1. Alice reads the balance ($100).\n2. Bob reads the balance ($100).\n3. Alice calculates the new balance ($100 - $10 = $90) and writes it to the database.\n4. Bob calculates the new balance ($100 - $10 = $90) and writes it to the database.\n\nThe final balance is $90, but it should be $80. Alice\u2019s update was lost because Bob\u2019s write overwrote it based on stale data.\n\nTransactions prevent this through the ACID properties, specifically **Isolation**. Isolation ensures that concurrent transactions do not interfere with each other. The database management system (DBMS) uses locking mechanisms or multi-version concurrency control (MVCC) to enforce this. In the example above, when Alice begins her transaction and reads the balance, the DBMS may place a lock on that row. Bob\u2019s transaction must wait until Alice\u2019s transaction commits or rolls back before he can read or write that data. Once Alice commits, Bob reads the updated balance ($90), calculates his new balance ($80), and writes it. The final result is correct.\n\nHowever, the strength of"
+    },
+    {
+      "name": "code-3",
+      "prompt_tokens": 37,
+      "output_tokens": 384,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 0.2005,
+      "decode_tokens_per_second": 45.75,
+      "wall_seconds": 8.5721,
+      "end_to_end_tokens_per_second": 44.8,
+      "text": "```python\nfrom typing import List, Tuple\n\n\ndef merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:\n    \"\"\"\n    Merge overlapping closed intervals.\n    \n    Algorithm:\n    1. Sort intervals by their start point.\n    2. Initialize an empty list to hold merged intervals.\n    3. Iterate through the sorted intervals:\n       - If the current interval overlaps with the last merged interval\n         (i.e., current start <= last merged end), merge them by updating\n         the end of the last merged interval to be the max of both ends.\n       - Otherwise, add the current interval as a new merged interval.\n    4. Return the list of merged intervals.\n    \n    Time Complexity: O(n log n) due to sorting.\n    Space Complexity: O(n) for the output list.\n    \n    Args:\n        intervals: A list of tuples representing closed intervals [start, end].\n        \n    Returns:\n        A list of merged, non-overlapping closed intervals sorted by start point.\n    \"\"\"\n    if not intervals:\n        return []\n    \n    # Sort intervals by start point\n    sorted_intervals = sorted(intervals, key=lambda x: x[0])\n    \n    merged: List[Tuple[int, int]] = []\n    \n    for current_start, current_end in sorted_intervals:\n        # If merged is empty or no overlap, add new interval\n        if not merged or current_start > merged[-1][1]:\n            merged.append((current_start, current_end))\n        else:\n            # Overlap: merge by extending the end if needed\n            merged[-1] = (merged[-1][0], max(merged[-1][1], current_end))\n    \n    return merged\n\n\n#"
+    },
+    {
+      "name": "concurrent-4-2",
+      "prompt_tokens": 37,
+      "output_tokens": 256,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 1.0174,
+      "decode_tokens_per_second": 32.93,
+      "wall_seconds": 8.7601,
+      "end_to_end_tokens_per_second": 29.22,
+      "text": "```python\nfrom typing import List, Tuple\n\n\ndef merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:\n    \"\"\"\n    Merge overlapping closed intervals.\n    \n    Algorithm:\n    1. Sort intervals by their start point.\n    2. Initialize an empty list to hold merged intervals.\n    3. Iterate through the sorted intervals:\n       - If the current interval overlaps with the last merged interval\n         (i.e., current start <= last merged end), extend the last merged\n         interval's end to be the max of the two ends.\n       - Otherwise, add the current interval as a new merged interval.\n    4. Return the list of merged intervals.\n    \n    Time complexity: O(n log n) due to sorting.\n    Space complexity: O(n) for the output list.\n    \n    Args:\n        intervals: A list of tuples (start, end) representing closed intervals.\n        \n    Returns:\n        A list of merged non-overlapping closed intervals.\n    \"\"\"\n    if not intervals:\n        return []\n    \n    # Sort intervals by start point\n    sorted_intervals = sorted(intervals, key=lambda x"
+    },
+    {
+      "name": "concurrent-4-4",
+      "prompt_tokens": 37,
+      "output_tokens": 256,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 1.0164,
+      "decode_tokens_per_second": 32.93,
+      "wall_seconds": 8.7596,
+      "end_to_end_tokens_per_second": 29.22,
+      "text": "```python\nfrom typing import List, Tuple\n\n\ndef merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:\n    \"\"\"\n    Merge overlapping closed intervals.\n    \n    Algorithm:\n    1. Sort intervals by their start point.\n    2. Initialize an empty list to hold merged intervals.\n    3. Iterate through the sorted intervals:\n       - If the current interval overlaps with the last merged interval\n         (i.e., current start <= last merged end), extend the last merged\n         interval's end to be the max of the two ends.\n       - Otherwise, add the current interval as a new merged interval.\n    4. Return the list of merged intervals.\n    \n    Time complexity: O(n log n) due to sorting.\n    Space complexity: O(n) for the output list.\n    \n    Args:\n        intervals: A list of tuples (start, end) representing closed intervals.\n        \n    Returns:\n        A list of merged non-overlapping closed intervals.\n    \"\"\"\n    if not intervals:\n        return []\n    \n    # Sort intervals by start point\n    sorted_intervals = sorted(intervals, key=lambda x"
+    },
+    {
+      "name": "concurrent-4-3",
+      "prompt_tokens": 41,
+      "output_tokens": 256,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 1.0166,
+      "decode_tokens_per_second": 27.75,
+      "wall_seconds": 10.2062,
+      "end_to_end_tokens_per_second": 25.08,
+      "text": "Database transactions are fundamental to maintaining data integrity, particularly in concurrent environments where multiple users access the same data simultaneously. One of the most critical anomalies they prevent is the \"lost update.\" This occurs when two transactions read the same data, modify it, and write it back, causing the second write to overwrite the first, effectively losing the first transaction\u2019s changes.\n\nTo understand how transactions prevent this, consider a concrete example involving a bank account with a balance of $100. Two clients, Alice and Bob, attempt to withdraw $10 simultaneously. Without proper transactional control, the following race condition might occur:\n\n1.  **Alice** reads the balance: $100.\n2.  **Bob** reads the balance: $100.\n3.  **Alice** calculates the new balance: $100 - $10 = $90, and writes $90 to the database.\n4.  **Bob** calculates the new balance: $100 - $10 = $90, and writes $90 to the database.\n\nThe final balance is $90, but it should be $80. Alice\u2019s withdrawal was lost because Bob\u2019s transaction overwrote her update based"
+    },
+    {
+      "name": "concurrent-4-1",
+      "prompt_tokens": 41,
+      "output_tokens": 256,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 1.018,
+      "decode_tokens_per_second": 27.75,
+      "wall_seconds": 10.2072,
+      "end_to_end_tokens_per_second": 25.08,
+      "text": "Database transactions are fundamental to maintaining data integrity, particularly in concurrent environments where multiple users access the same data simultaneously. One of the most critical anomalies they prevent is the \"lost update.\" This occurs when two transactions read the same data, modify it, and write it back, causing the second write to overwrite the first, effectively losing the first transaction\u2019s changes.\n\nTo understand how transactions prevent this, consider a concrete example involving a bank account with a balance of $100. Two clients, Alice and Bob, attempt to withdraw $10 simultaneously. Without proper transactional control, the following race condition might occur:\n\n1.  **Alice** reads the balance: $100.\n2.  **Bob** reads the balance: $100.\n3.  **Alice** calculates the new balance: $100 - $10 = $90, and writes $90 to the database.\n4.  **Bob** calculates the new balance: $100 - $10 = $90, and writes $90 to the database.\n\nThe final balance is $90, but it should be $80. Alice\u2019s withdrawal was lost because Bob\u2019s transaction overwrote her update based"
+    },
+    {
+      "name": "prefill-8192-1",
+      "prompt_tokens": 8215,
+      "output_tokens": 1,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 5.6907,
+      "decode_tokens_per_second": null,
+      "wall_seconds": 5.6909,
+      "end_to_end_tokens_per_second": 0.18,
+      "text": "OK",
+      "effective_prefill_tokens_per_second": 1443.58
+    },
+    {
+      "name": "prefill-8192-2",
+      "prompt_tokens": 8215,
+      "output_tokens": 1,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 4.5365,
+      "decode_tokens_per_second": null,
+      "wall_seconds": 4.5367,
+      "end_to_end_tokens_per_second": 0.22,
+      "text": "OK",
+      "effective_prefill_tokens_per_second": 1810.87
+    },
+    {
+      "name": "prefill-32768-1",
+      "prompt_tokens": 32791,
+      "output_tokens": 1,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 17.9036,
+      "decode_tokens_per_second": null,
+      "wall_seconds": 17.9037,
+      "end_to_end_tokens_per_second": 0.06,
+      "text": "OK",
+      "effective_prefill_tokens_per_second": 1831.53
+    },
+    {
+      "name": "prefill-32768-2",
+      "prompt_tokens": 32791,
+      "output_tokens": 1,
+      "first_chunk_tokens": 1,
+      "ttft_seconds": 18.0327,
+      "decode_tokens_per_second": null,
+      "wall_seconds": 18.0328,
+      "end_to_end_tokens_per_second": 0.06,
+      "text": "OK",
+      "effective_prefill_tokens_per_second": 1818.42
+    }
+  ],
+  "concurrency_4": {
+    "wall_seconds": 10.222,
+    "aggregate_tokens_per_second_including_prefill": 100.18,
+    "median_per_stream_decode_tokens_per_second": 30.34,
+    "median_ttft_seconds": 1.017
+  },
+  "metric_deltas": {
+    "vllm:spec_decode_num_drafts_total": 1167.0,
+    "vllm:spec_decode_num_draft_tokens_total": 3501.0,
+    "vllm:spec_decode_num_accepted_tokens_total": 2300.0,
+    "vllm:request_success_total": 16.0
+  },
+  "completed_benchmark_requests": 16,
+  "observed_other_completed_requests": 0.0,
+  "draft_acceptance_percent": 65.7,
+  "min_mem_available_gib": 19.94,
+  "prose": {
+    "median_decode_tokens_per_second": 36.83,
+    "range_decode_tokens_per_second": [
+      35.65,
+      36.97
+    ],
+    "median_ttft_seconds": 0.2363
+  },
+  "code": {
+    "median_decode_tokens_per_second": 45.75,
+    "range_decode_tokens_per_second": [
+      44.12,
+      45.81
+    ],
+    "median_ttft_seconds": 0.2005
+  },
+  "methodology": {
+    "single_stream": "Three 384-token samples per workload, after two excluded 64-token warmups; alternating prose/code order; temperature 0; thinking off.",
+    "decode_rate": "(total output tokens - tokens in first streamed content chunk) / (last content time - first content time), using continuous server usage counts.",
+    "concurrency": "One batch of four requests: two prose, two code, each capped at 256 output tokens. Aggregate counts all output tokens divided by batch wall time, including prefill.",
+    "prefill": "Two distinct fresh documents per length, one generated token; prefix caching disabled. Effective input throughput includes request overhead.",
+    "isolation": "No other completed generation requests observed in the request-success counter delta; server initially idle.",
+    "limitations": "Small live snapshot, content-dependent; no matched baseline comparison or full-context stress test."
+  },
+  "prefill": {
+    "8192": {
+      "actual_prompt_tokens": 8215,
+      "median_ttft_seconds": 5.1136,
+      "effective_input_tokens_per_second": 1606.5
+    },
+    "32768": {
+      "actual_prompt_tokens": 32791,
+      "median_ttft_seconds": 17.9682,
+      "effective_input_tokens_per_second": 1824.95
+    }
+  },
+  "prompts": {
+    "prose": "Explain how database transactions prevent lost updates. Give a concrete example with two clients and discuss isolation levels. Write about 500 words.",
+    "code": "Write a Python function that merges overlapping closed intervals. Include type hints, an explanation of the algorithm, and five runnable examples.",
+    "prefill_generation": "For each target 8192 or 32768 and repeat 0 or 1: seed random.Random(target + repeat); create 4000 lines with f\"Record {i:05d}: {rng.choice([copper,marble,cedar,quartz])} order {rng.randrange(1000,9999)} has been checked and filed.\" (choices are strings). Tokenize, take the first target tokens, detokenize, then prepend \"Read the following records.\\n\" and append \"\\nReply with OK.\"."
+  },
+  "server_capacity": {
+    "available_kv_cache_gib": 7.44,
+    "cached_tokens": 507810,
+    "full_context_concurrency": 1.94,
+    "restarts_after_benchmark": 0,
+    "health_http_after_benchmark": 200
+  }
+}

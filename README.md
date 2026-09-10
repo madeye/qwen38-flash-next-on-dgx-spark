@@ -11,19 +11,79 @@ at `d83f10c`, with its Apache-licensed vLLM patch set vendored under
 [blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX),
 remains available through the explicit legacy launchers.
 
-## Default NVIDIA TP1 recipe (2026-09-06)
+## Default NVIDIA TP1 recipe (2026-09-10)
 
 `bash scripts/serve.sh` starts the validated single-Spark NVIDIA recipe against
 the official `nvidia/Qwen3.8-Flash-Next-NVFP4` checkpoint at
 `/var/tmp/models/Qwen3.8-Flash-Next-NVFP4-nvidia`. It uses the pinned vLLM
-nightly `8a728663`, staged disk PLE gather, a 65,536-token MTP3 draft vocabulary,
+nightly `8a728663`, staged disk PLE gather, MiaAI's 47,149-token MTP3 draft vocabulary,
 six sequences, 4,096-token prefill chunks, FP8 KV, 262,144 context tokens,
-`gpu-memory-utilization=0.80`, decode-only CUDA graphs, and disabled prefix
-caching. The service uses Docker's `unless-stopped` policy, so it returns when
-the Docker daemon restarts.
+GPU memory utilization derived from `HOST_RESERVE_GIB=30` (unless `GMU` is
+explicitly set), decode-only CUDA graphs, and disabled prefix caching. GDN
+recurrent state uses BF16. The service uses Docker's `unless-stopped` policy,
+so it returns when the Docker daemon restarts.
 
-The measured 40-prompt median was **43.5 tok/s** with **0.26 s** median TTFT
-and a 0.88 automatic task score. The GPU is locked to its supported 3,003 MHz
+### Current live performance
+
+Measured on 2026-09-10 at 11:21–11:23 UTC, directly against the local vLLM API.
+Temperature 0, thinking off, native MTP3 enabled, DFlash disabled.
+
+| Workload | Speed | Time to first token |
+| --- | ---: | ---: |
+| Prose, one request | **36.83 output tok/s** | **0.236 s** |
+| Code, one request | **45.75 output tok/s** | **0.201 s** |
+| Four simultaneous requests, mixed prose/code | **100.18 output tok/s aggregate** | **1.017 s median** |
+| Fresh 8,215-token prompt | 1,606.5 input tok/s | 5.114 s |
+| Fresh 32,791-token prompt | 1,824.95 input tok/s | 17.968 s |
+
+Single-request generation rates exclude time to first token and are medians of
+three 384-token samples per workload, after two excluded warmups. The four-request
+result is one batch of 256-token outputs; its aggregate rate includes prefill.
+Long-prompt figures are medians of two fresh documents per length and include
+request overhead. These are different throughput definitions, not interchangeable
+rates. See the [raw samples and method](docs/performance-live-2026-09-10-112330.json).
+
+All 16 benchmark requests succeeded, with no other completed generation requests
+observed during the measurement. MTP accepted 65.7% of proposed tokens across the
+run. Available host memory stayed at or above 19.94 GiB; the container remained
+healthy with zero restarts. The 30 GiB host reserve produced `GMU=0.7535`, a
+7.44 GiB KV budget, and 507,810 cached-token capacity. Six scheduler slots do not
+mean six full 262K requests fit: the reported full-context capacity is 1.94x.
+
+This is a small live snapshot, not a matched speedup comparison or a quality
+benchmark. The earlier 40-prompt result below used a different workload and
+memory configuration.
+
+### MiaAI optimization update (2026-09-10)
+
+The compatible changes from
+[MiaAI commit d038090](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark/commit/d03809008834124e80223c3482f2ddb59577a48f)
+are applied to this NVIDIA TP1 recipe:
+
+- `DRAFT_VOCAB` defaults to the upstream 47,149-token code vocabulary. The MTP
+  head computes only those rows, then maps logits back to their original token
+  IDs. The target still verifies with its full vocabulary. The data and its
+  upstream license are in [`src/miaai/`](src/miaai/PROVENANCE.md).
+- `MAMBA_SSM_CACHE_DTYPE=bfloat16` halves recurrent-state storage relative to
+  the checkpoint's FP32 setting. Empty or `float32` restores checkpoint precision.
+- `CAPTURE_SIZES=auto` derives every decode width `(MTP+1)*S` for `S=1..SEQS`.
+  At the default MTP3 and six sequences this remains `[4,8,12,16,20,24]`.
+
+The NVIDIA checkpoint, staged disk PLE implementation, 4,096-token chunks, six
+sequences, and V2 runner remain the local recipe. The launcher now reserves host
+memory through `HOST_RESERVE_GIB`; an explicit `GMU` overrides that calculation.
+MiaAI uses a different checkpoint and packed PLE format, so its loader and memory estimates
+are not interchangeable with these. DFlash is not enabled by `serve.sh`.
+
+`DRAFT_VOCAB=65536 MAMBA_SSM_CACHE_DTYPE=float32 bash scripts/serve.sh` restores
+the earlier draft selection and state precision. `DRAFT_VOCAB=0` (or empty)
+uses the full MTP vocabulary. A file path selects a custom token-ID list;
+relative paths resolve against this repository. Invalid selections fail before
+the existing container is stopped. Non-English or non-code traffic may have
+different draft acceptance; upstream's published speedups are not local results.
+
+Before this update, on 2026-09-06 at `GMU=0.80`, the measured 40-prompt median was
+**43.5 tok/s** with **0.26 s** median TTFT and a 0.88 automatic task score. The GPU is locked to its supported 3,003 MHz
 ceiling; sustained decode reaches 2,535 MHz on this host. Use
 `scripts/serve-legacy.sh` or `scripts/serve-500k.sh` only for the older
 RadixArk/hybrid and 500k-context profiles.
@@ -209,12 +269,15 @@ usage, timings, configuration, and limitations.
 
 ## Why it fits at all
 
-The NVFP4 checkpoint is 122 GiB — larger than the usable unified pool once you
-add KV cache. The trick from the recipe: 44 GiB of that is the n-gram embedding
-("PLE") table, a pure lookup that a token only touches 16 rows of. The patched
-image serves it from NVMe via `mmap` instead of keeping it resident:
+The official NVIDIA checkpoint contains **123.53 GiB** of tensor data, including
+**47.68 GiB** of PLE n-gram embeddings and **2.51 GiB** of MTP weights, measured
+from its safetensors headers. Despite the NVFP4 checkpoint name, the PLE table
+is **FP8**; main MoE experts use NVFP4 and other weights use mixed precisions.
+Each token looks up 16 PLE rows. The default launcher reads the needed rows from
+NVMe into staging buffers instead of allocating the entire table on the GPU:
 
-- Resident weights drop to **~76 GiB**; the rest of the pool is KV cache.
+- Model loading uses **76.48 GiB** in the measured TP1 launch. The rest of the
+  memory must cover caches, activations, runtime overhead, and the host.
 - On unified memory, "CPU offload" saves nothing (same pool) — only serving
   from disk actually frees memory.
 
@@ -341,24 +404,32 @@ a reverse proxy — and set the dashboard's API base URL to that public address.
 
 ## Reducing memory footprint on a MoE (what actually works here)
 
-- **PLE table mmap** (already on): −44 GiB, the single biggest win.
-- **Hybrid mode**: −7 GiB more, plus faster decode.
-- **Lower `GPU_MEM` to 0.80** for long-running service: the recipe authors saw
-  0.85 drift into swap after a day.
-- **Lower `CTX`/`SEQS`** if you don't need 262k context — KV is the other big
-  consumer.
+- **Disk-backed PLE** (already on): avoids keeping the full 47.68 GiB FP8 table
+  resident in the default NVIDIA profile.
+- **Host reserve**: `HOST_RESERVE_GIB=30` is the measured default. Increasing it
+  reduces the GPU/KV budget. A 36 GiB reserve left only 0.97 GiB usable KV,
+  below the 3.84 GiB required for one 262K request, so startup failed.
+- **Lower `MAXLEN`/`SEQS`** when less context or concurrency is sufficient.
+  The legacy launchers call the context setting `CTX`.
+- **Legacy hybrid mode** saves about 7 GiB with its converted side layers.
 - Expert streaming/offload is **not** useful on this chip: unified memory means
   host RAM is the same pool, and experts are touched every token so disk paging
   would thrash. vLLM has no expert-mmap path anyway.
 - GGUF IQ3/IQ2 quants via llama.cpp shrink further but cost MTP, prefill speed
   (~540 tok/s vs ~1,000+), and quality.
 
-## DFlash note
+## DFlash and n-gram embeddings
 
-No DFlash drafter exists for this checkpoint (the [z-lab/dflash](https://github.com/z-lab/dflash)
-zoo covers Qwen3.5/3.6 and Qwen3.8-27B). Not needed: the model ships a built-in
-MTP head, enabled in vLLM with
-`--speculative-config '{"method":"mtp","num_speculative_tokens":2}'`.
+The measured default uses native MTP3 and has DFlash disabled:
+`--speculative-config '{"method":"mtp","num_speculative_tokens":3}'`.
+DFlash, MTP, and n-gram speculation refer to drafting strategies; the default
+selects MTP only.
+The model's PLE n-gram embeddings are part of the target model and are required
+regardless of which speculative method is selected.
+
+PLE NVFP4 storage would require a new packed format, a gather/dequantization
+implementation, and model-quality validation. The current loader supports the
+FP8 checkpoint table; changing a quantization flag does not convert it.
 
 ## Known limitations (from the recipe, confirmed relevant)
 

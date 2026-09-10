@@ -4,17 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Qwen3.8-Flash-Next on a single NVIDIA DGX Spark</title>
-<meta name="description" content="Official NVIDIA NVFP4 Qwen3.8-Flash-Next on one DGX Spark: 43.5 tok/s median decode across 40 real prompts with staged PLE, MTP3, FP8 KV, and 262k context.">
+<meta name="description" content="Single DGX Spark, measured September 10: 36.8 tok/s prose, 45.8 tok/s code, 100.2 tok/s aggregate with four requests. MTP3, BF16 state, and disk-backed FP8 PLE.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
-<meta property="og:description" content="Official NVIDIA NVFP4 on one GB10: 43.5 tok/s median decode across 40 real prompts, 0.26 s median TTFT, MTP3, FP8 KV, and 262k context.">
+<meta property="og:description" content="Single GB10, September 10: 36.8 tok/s prose, 45.8 tok/s code, 100.2 tok/s aggregate with four requests. MTP3, BF16 state, and 262k context.">
 <meta property="og:url" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/">
 <meta property="og:image" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/assets/social-card.png?v=20260906-tp1">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
-<meta name="twitter:description" content="Official NVIDIA NVFP4 on one GB10: 43.5 tok/s median decode across 40 real prompts, 0.26 s median TTFT, MTP3, FP8 KV, and 262k context.">
+<meta name="twitter:description" content="Single GB10, September 10: 36.8 tok/s prose, 45.8 tok/s code, 100.2 tok/s aggregate with four requests. MTP3, BF16 state, and 262k context.">
 <meta name="twitter:image" content="https://madeye.github.io/qwen38-flash-next-on-dgx-spark/assets/social-card.png?v=20260906-tp1">
 <style>
   :root { --bg:#0d1117; --fg:#e6edf3; --dim:#8b949e; --green:#76b900; --chip:#161b22; --edge:#30363d; }
@@ -53,12 +53,41 @@
 
   <img class="card" src="assets/social-card.png?v=20260906-tp1" alt="Qwen3.8-Flash-Next on a single NVIDIA DGX Spark">
 
-  <h2>Default NVIDIA TP1 recipe (validated 2026-09-06)</h2>
-  <p><code>scripts/serve.sh</code> runs the official NVIDIA checkpoint with the
-    pinned vLLM nightly, staged disk PLE gather, a 65,536-token reduced-vocabulary
-    MTP3 draft, six scheduler slots, a 4,096-token prefill chunk, FP8 KV,
-    262,144-token context, and decode-only CUDA graphs. Prefix caching is disabled.
-    The resulting full recipe is within 0.9% of the source recipe's 43.9 tok/s report.</p>
+  <p class="dim">Card: the earlier September 6 benchmark. Current measurements follow.</p>
+
+  <h2>Default NVIDIA TP1 recipe (2026-09-10)</h2>
+  <p><code>scripts/serve.sh</code> runs the official NVIDIA checkpoint with pinned
+    vLLM nightly <code>8a728663</code>, staged disk PLE gather, MiaAI's 47,149-token
+    MTP3 draft vocabulary, BF16 recurrent state, FP8 KV, six sequence slots,
+    4,096-token prefill chunks, 262,144-token context, and decode CUDA graphs.
+    Prefix caching and DFlash are disabled. The default 30 GiB host reserve
+    derives <code>GMU=0.7535</code> on this host.</p>
+  <table>
+    <tr><th>Workload</th><th>Speed</th><th>First token</th></tr>
+    <tr><td>Prose, one request</td><td><b>36.83 output tok/s</b></td><td>0.236 s</td></tr>
+    <tr><td>Code, one request</td><td><b>45.75 output tok/s</b></td><td>0.201 s</td></tr>
+    <tr><td>Four mixed requests</td><td><b>100.18 output tok/s aggregate</b></td><td>1.017 s median</td></tr>
+    <tr><td>Fresh 8,215-token prompt</td><td>1,606.5 input tok/s</td><td>5.114 s</td></tr>
+    <tr><td>Fresh 32,791-token prompt</td><td>1,824.95 input tok/s</td><td>17.968 s</td></tr>
+  </table>
+  <p>Measured September 10 at 11:21–11:23 UTC, thinking off and temperature 0.
+    Single-request decode excludes first-token latency: medians of three 384-token
+    samples per workload after warmup. The four-request result is one batch of
+    256-token outputs and includes prefill. Long-prompt figures are medians of two
+    fresh documents per size and include request overhead.</p>
+  <p>All 16 benchmark requests succeeded, with no other completed generation
+    requests observed. Minimum available host memory was 19.94 GiB, MTP draft
+    acceptance was 65.7%, and the container remained healthy with zero restarts.
+    Its 7.44 GiB KV budget holds 507,810 tokens: six scheduler slots do not imply
+    six full 262K requests fit. This is a small snapshot, not a matched speedup
+    comparison or a quality benchmark.</p>
+  <p><a href="performance-live-2026-09-10-112330.json">Raw samples and measurement method</a> ·
+    <a href="https://github.com/madeye/qwen38-flash-next-on-dgx-spark/blob/main/docs/miaai-optimization-validation-2026-09-10.md">Optimization validation</a></p>
+
+  <h2>Earlier NVIDIA TP1 benchmark (2026-09-06)</h2>
+  <p>This different 40-prompt workload used the 65,536-token draft selection,
+    FP32 recurrent state, and <code>GMU=0.80</code>. Its aggregate median is not
+    directly comparable with the two-workload snapshot above.</p>
   <table>
     <tr><th>Profile / workload</th><th>Measured result</th></tr>
     <tr><td>40 real prompts, one stream</td><td><b>43.5 tok/s median decode</b></td></tr>
@@ -83,12 +112,16 @@
 
   <h2>How it fits in 128 GB</h2>
   <p>The official checkpoint holds a 51B n-gram embedding table that each token only
-  reads 16 rows of. The patched vLLM image serves it from NVMe via staged <code>mmap</code>,
-  so resident weights drop to ~76 GiB and the rest of the unified pool is KV cache.</p>
+  reads 16 rows of. The patched vLLM image serves it from NVMe via staged disk reads.
+  The FP8 PLE table accounts for 47.68 GiB of checkpoint data. Model loading uses
+  76.48 GiB; caches, activations, runtime overhead, and the host share the remaining
+  memory. PLE is part of the target model and remains necessary with any speculative
+  method. NVFP4 PLE storage is not supported by the current loader.</p>
 
   <h2>Serving config</h2>
   <pre><code>scripts/serve.sh          # NVIDIA TP1 · native 262,144 · 6 seqs
-# MTP=3 · FP8 KV · 4,096-token chunks · staged PLE
+# MTP=3 · 47,149-token draft vocabulary · BF16 recurrent state
+# FP8 KV · 4,096-token chunks · staged PLE · HOST_RESERVE_GIB=30
 # decode CUDA graph widths: [4,8,12,16,20,24]
 scripts/serve-500k.sh     # legacy YaRN 524,288 · hybrid · 1 seq</code></pre>
 

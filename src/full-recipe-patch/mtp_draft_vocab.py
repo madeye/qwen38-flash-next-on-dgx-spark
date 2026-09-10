@@ -7,6 +7,8 @@
 # so outputs stay exact, only the draft acceptance can change. Idea: FR-Spec (frequency-ranked speculative sampling,
 # Zhao et al. 2025); MiaAI-Lab demonstrated a corpus-built 65,536-token draft vocabulary on this model (AGPL code,
 # not used here). This is an independent implementation.
+# Local 2026-09-10: also accept a file of arbitrary global token IDs, so
+# MiaAI's published vocabulary data can be used by this NVIDIA implementation.
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Inference-only Qwen4Exp MTP (Multi-Token Predictor) model.
@@ -365,12 +367,25 @@ class Qwen4ExpMultiTokenPredictor(nn.Module):
         return loader.load_weights(weights, mapper=mapper)
 
 
-def _draft_vocab_size() -> int:
+def _draft_vocab_ids(vocab_size: int) -> tuple[int, ...]:
+    """Select a prefix count or explicit token IDs once, before graph capture."""
     import os as _os
-    try:
-        return int(_os.environ.get("QWEN4EXP_DRAFT_VOCAB", "0"))
-    except ValueError:
-        return 0
+    from pathlib import Path
+
+    value = _os.environ.get("QWEN4EXP_DRAFT_VOCAB", "0")
+    if not value or value == "0":
+        return ()
+    if value.isdecimal():
+        count = int(value)
+        if not 0 < count <= vocab_size:
+            raise ValueError("Draft vocabulary count exceeds the model vocabulary")
+        return tuple(range(count))
+    ids = tuple(sorted({
+        int(line) for line in Path(value).read_text().splitlines() if line.strip()
+    }))
+    if not ids or ids[0] < 0 or ids[-1] >= vocab_size:
+        raise ValueError("Draft vocabulary must contain valid model token IDs")
+    return ids
 
 
 @support_torch_compile(
@@ -409,6 +424,7 @@ class Qwen4ExpMTP(nn.Module, SupportsPP, Qwen4ExpMixtureOfExperts):
 
         super().__init__()
         self.config = config
+        self._draft_token_ids = _draft_vocab_ids(config.vocab_size)
         self.model = Qwen4ExpMultiTokenPredictor(
             vllm_config=vllm_config,
             prefix=maybe_prefix(prefix, "mtp"),
@@ -457,17 +473,16 @@ class Qwen4ExpMTP(nn.Module, SupportsPP, Qwen4ExpMixtureOfExperts):
     def compute_logits(
         self, hidden_states: torch.Tensor, spec_step_idx: int = 0
     ) -> torch.Tensor | None:
-        k = _draft_vocab_size()
-        if k <= 0 or not hasattr(self.lm_head, "weight"):
+        if not self._draft_token_ids or not hasattr(self.lm_head, "weight"):
             return self.logits_processor(self.lm_head, hidden_states)
-        return self._reduced_vocab_logits(hidden_states, k)
+        return self._reduced_vocab_logits(hidden_states)
 
     # --- Kai/2Wild: reduced-vocabulary drafting ---------------------------
-    def _reduced_vocab_logits(self, hidden_states: torch.Tensor, k: int) -> torch.Tensor:
-        """Logits for token ids [0, k) only; every other id is -inf.
+    def _reduced_vocab_logits(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Logits for selected global token IDs; every other ID is -inf.
 
         Each TP rank holds a vocab slice of lm_head; it multiplies the rows of
-        its slice that fall inside [0, k), writes them into a [n, k] buffer,
+        its slice that belong to the selection, writes them into a [n, k] buffer,
         and the ranks sum (each column is owned by exactly one rank). The
         result is scattered into a full-width [n, vocab] tensor so the
         speculator's argmax yields global ids unchanged.
@@ -480,23 +495,33 @@ class Qwen4ExpMTP(nn.Module, SupportsPP, Qwen4ExpMixtureOfExperts):
 
         head = self.lm_head
         cache = getattr(self, "_draft_vocab_cache", None)
-        if cache is None or cache[0] != k:
+        if cache is None:
             start = int(head.shard_indices.org_vocab_start_index)
             end = int(head.shard_indices.org_vocab_end_index)
-            lo, hi = max(start, 0), min(end, k)
-            w = head.weight[lo - start : hi - start].contiguous() if hi > lo else None
-            cache = (k, start, lo, hi, w)
+            ids = torch.tensor(
+                self._draft_token_ids, dtype=torch.long, device=head.weight.device
+            )
+            positions = torch.where((ids >= start) & (ids < end))[0]
+            w = head.weight.index_select(0, ids[positions] - start).contiguous()
+            cache = (ids, positions, w)
             self._draft_vocab_cache = cache
-        _, start, lo, hi, w = cache
+            from vllm.logger import init_logger
+
+            init_logger(__name__).info(
+                "MTP draft vocabulary: %d/%d rows",
+                len(self._draft_token_ids), self.config.vocab_size,
+            )
+        ids, positions, w = cache
+        k = len(self._draft_token_ids)
         n = hidden_states.shape[0]
         small = torch.zeros((n, k), dtype=hidden_states.dtype, device=hidden_states.device)
-        if w is not None:
-            small[:, lo:hi] = F.linear(hidden_states.to(w.dtype), w).to(small.dtype)
+        if w.shape[0]:
+            small[:, positions] = F.linear(hidden_states.to(w.dtype), w).to(small.dtype)
         if get_tensor_model_parallel_world_size() > 1:
             small = tensor_model_parallel_all_reduce(small)
         vocab = int(self.config.vocab_size)
         full = torch.full((n, vocab), float("-inf"), dtype=small.dtype, device=small.device)
-        full[:, :k] = small
+        full[:, ids] = small
         scale = getattr(self.logits_processor, "scale", 1.0)
         if scale != 1.0:
             full.mul_(scale)
